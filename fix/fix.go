@@ -72,11 +72,20 @@ func (f *Fixer) Run(opts Options) error {
 	return f.fixGUI(opts)
 }
 
-// fixGUI is the path for regular GUI text fields: select the last word,
-// read the primary selection, analyze, type the fix over the selection.
+// fixGUI is the path for regular GUI text fields. If the user has an
+// active selection (mouse or Shift+arrows), it is fixed as-is; otherwise
+// the word left of the caret is selected and fixed.
 func (f *Fixer) fixGUI(opts Options) error {
 	if f.Cfg.Capture.Method == "cut" {
 		return f.fixGUICut(opts)
+	}
+
+	// An active selection reaches the daemon as the primary selection.
+	// Respect it when present; otherwise fall back to the word at the
+	// caret. GUI toolkits clear the primary when the selection collapses,
+	// so an empty read reliably means "no user selection".
+	if pre := f.Way.ReadPrimary(); pre != "" {
+		return f.fixPreSelected(pre, opts)
 	}
 
 	f.Way.ClearPrimary()
@@ -108,6 +117,34 @@ func (f *Fixer) fixGUI(opts Options) error {
 		return nil
 	}
 
+	if err := f.Way.TypeText(corrected); err != nil {
+		return err
+	}
+	f.Way.ClearPrimary()
+	return f.switchLayoutAfter(corrected, opts)
+}
+
+// fixPreSelected fixes a selection the user made themselves (mouse or
+// Shift+arrows). The selection is left completely alone when there is
+// nothing to fix or the selection is not a single replaceable word.
+func (f *Fixer) fixPreSelected(sel string, opts Options) error {
+	word, ok := sanitizeSelection(sel)
+	if !ok {
+		return fmt.Errorf("selection is not a single word (%d bytes), leaving it untouched", len(sel))
+	}
+	f.logf(opts, "using existing selection %q", word)
+
+	corrected, needsFix := f.decide(word)
+	if !needsFix {
+		f.logf(opts, "no fix needed for %q", word)
+		return nil
+	}
+	if opts.DryRun {
+		f.logf(opts, "dry run: would replace %q with %q", word, corrected)
+		return nil
+	}
+
+	// Typing replaces the active selection in GUI applications.
 	if err := f.Way.TypeText(corrected); err != nil {
 		return err
 	}

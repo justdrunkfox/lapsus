@@ -126,7 +126,7 @@ func newTestFixer(t *testing.T, rec *recorder, nir *fakeNiri) *Fixer {
 }
 
 func TestFixGUIHappyPath(t *testing.T) {
-	rec := &recorder{primaryResponses: []string{"ghbdtn"}}
+	rec := &recorder{primaryResponses: []string{"", "ghbdtn"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
 
@@ -175,7 +175,7 @@ func TestFixGUIHappyPath(t *testing.T) {
 }
 
 func TestFixGUINoFixNeeded(t *testing.T) {
-	rec := &recorder{primaryResponses: []string{"hello"}}
+	rec := &recorder{primaryResponses: []string{"", "hello"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
 
@@ -231,7 +231,7 @@ func TestFixTerminalNoSelection(t *testing.T) {
 }
 
 func TestFixDryRunTypesNothing(t *testing.T) {
-	rec := &recorder{primaryResponses: []string{"ghbdtn"}}
+	rec := &recorder{primaryResponses: []string{"", "ghbdtn"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
 
@@ -249,7 +249,7 @@ func TestFixDryRunTypesNothing(t *testing.T) {
 }
 
 func TestFixGUITooLongSelection(t *testing.T) {
-	rec := &recorder{primaryResponses: []string{strings.Repeat("word ", 40)}}
+	rec := &recorder{primaryResponses: []string{"", strings.Repeat("word ", 40)}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
 
@@ -270,7 +270,7 @@ func TestFixGUITooLongSelection(t *testing.T) {
 func TestFixSwitchLayoutAlreadyActive(t *testing.T) {
 	// Word typed in EN ("ghbdtn") fixed to RU; RU already active — the fix
 	// happens (e.g. stale selection) and no switch is needed.
-	rec := &recorder{primaryResponses: []string{"ghbdtn"}}
+	rec := &recorder{primaryResponses: []string{"", "ghbdtn"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}}
 	f := newTestFixer(t, rec, nir)
 
@@ -290,5 +290,56 @@ func TestAcquireLockIsExclusive(t *testing.T) {
 	defer l1.close()
 	if _, err := acquireLock(); err == nil {
 		t.Error("second acquire should fail while the first lock is held")
+	}
+}
+
+func TestFixGUIPreSelectedWord(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"руддщ"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// The user's own selection is replaced by typing — no word selection
+	// at the caret (Ctrl+Shift+Left) must happen.
+	if rec.hasCall("-k Left") {
+		t.Errorf("existing selection must be used, not word-at-caret, calls: %v", rec.calls)
+	}
+	if !rec.hasCall("wtype -- hello") {
+		t.Errorf("expected the selection to be replaced, calls: %v", rec.calls)
+	}
+	if !nir.hasCall("switch-layout 0") {
+		t.Errorf("expected switch to EN, niri calls: %v", nir.calls)
+	}
+}
+
+func TestFixGUIPreSelectedNoFixLeavesSelection(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"hello"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype") {
+			t.Errorf("nothing to fix — selection must stay untouched, got %q", c)
+		}
+	}
+}
+
+func TestFixGUIPreSelectedMultiLineRefused(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"two\nwords"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{}); err == nil {
+		t.Fatal("multi-line selection must be refused")
+	}
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype") {
+			t.Errorf("refused selection must not be typed over, got %q", c)
+		}
 	}
 }
