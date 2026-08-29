@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
+	"github.com/voev/lapsus/daemon"
 	"github.com/voev/lapsus/dict"
 	"github.com/voev/lapsus/fix"
 	"github.com/voev/lapsus/layout"
@@ -41,6 +43,8 @@ func main() {
 		fmt.Println(convertText(strings.Join(os.Args[2:], " ")))
 	case "fix":
 		runFixCommand(os.Args[2:])
+	case "daemon":
+		runDaemonCommand(os.Args[2:])
 	case "version":
 		fmt.Println("lapsus", version)
 	case "help", "-h", "--help":
@@ -60,11 +64,47 @@ Usage:
   lapsus fix [flags]        one-shot: fix the last typed word (bind to an niri hotkey)
       -n, --dry-run         report what would happen, change nothing
       -v, --verbose         log each step to stderr
+  lapsus daemon [flags]     auto-fix: watch keystrokes, fix at word boundaries
+      -n, --dry-run         log fixes without injecting them
+      -v, --verbose         log each step to stderr
+      SIGUSR1               toggle pause (pkill -USR1 lapsus)
   lapsus version            print version
-
-Planned (see TODO.md):
-  lapsus daemon             background auto-fix mode
 `)
+}
+
+// runDaemonCommand implements `lapsus daemon`: watch keystrokes via
+// evdev and auto-fix wrong-layout words at word boundaries.
+func runDaemonCommand(args []string) {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	var dryRun, verbose bool
+	fs.BoolVar(&dryRun, "dry-run", false, "log fixes without injecting them")
+	fs.BoolVar(&dryRun, "n", false, "shorthand for --dry-run")
+	fs.BoolVar(&verbose, "v", false, "log each step to stderr")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "lapsus daemon: unexpected argument %q\n", fs.Arg(0))
+		os.Exit(2)
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "lapsus daemon:", err)
+		os.Exit(1)
+	}
+	d := dict.New()
+	if err := d.LoadUserDict(cfg.Dictionary.UserDir); err != nil {
+		fmt.Fprintln(os.Stderr, "lapsus daemon:", err)
+		os.Exit(1)
+	}
+	dm := daemon.New(cfg, analyze.New(d), &niri.Client{},
+		&wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond},
+		verbose, dryRun)
+	if err := dm.Run(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "lapsus daemon:", err)
+		os.Exit(1)
+	}
 }
 
 // runFixCommand implements `lapsus fix`: capture the last typed word in

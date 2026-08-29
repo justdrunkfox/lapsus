@@ -16,7 +16,6 @@ import (
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
 	"github.com/voev/lapsus/dict"
-	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
 	"github.com/voev/lapsus/wayland"
 )
@@ -64,7 +63,7 @@ func (f *Fixer) Run(opts Options) error {
 		return err
 	}
 	appID := win.AppIDOr("")
-	terminal := niri.IsTerminalApp(appID, f.Cfg.Hotkey.Terminals)
+	terminal := niri.AppIDIn(appID, f.Cfg.Hotkey.Terminals)
 	f.logf(opts, "focused window %d app_id=%q terminal=%v", win.ID, appID, terminal)
 
 	if terminal {
@@ -157,8 +156,9 @@ func (f *Fixer) fixGUICut(opts Options) error {
 
 // fixTerminal is the path for terminals: they do not update the primary
 // selection on Ctrl+Shift+Left, so the word must be selected with the
-// mouse beforehand. The fix goes through the clipboard and Ctrl+Shift+V
-// (proven wksw pipeline), so the clipboard gets clobbered.
+// mouse beforehand. The fix replaces the word by BackSpace × word length
+// plus typing — this assumes the caret sits right after the word, which
+// is the normal case of fixing the word you have just typed.
 func (f *Fixer) fixTerminal(opts Options) error {
 	word, ok := sanitizeSelection(f.Way.ReadPrimary())
 	if !ok {
@@ -176,10 +176,7 @@ func (f *Fixer) fixTerminal(opts Options) error {
 		return nil
 	}
 
-	if err := f.Way.CopyClipboard(corrected); err != nil {
-		return err
-	}
-	if err := f.Way.PasteTerminal(); err != nil {
+	if err := f.Way.ReplaceWord(word, corrected); err != nil {
 		return err
 	}
 	f.Way.ClearPrimary()
@@ -200,58 +197,17 @@ func (f *Fixer) switchLayoutAfter(corrected string, opts Options) error {
 	if !f.Cfg.Fix.SwitchLayout {
 		return nil
 	}
-	target := analyze.GuessLayout(corrected)
-	ls, err := f.Niri.KeyboardLayouts()
+	switched, err := f.Niri.SwitchToLayoutOf(corrected)
 	if err != nil {
 		// The word is already fixed; the layout switch is best-effort
 		// (older niri versions have no keyboard-layouts IPC).
-		f.logf(opts, "cannot query layouts, skipping switch: %v", err)
+		f.logf(opts, "cannot switch layout: %v", err)
 		return nil
 	}
-	idx := findLayoutIndex(ls.Names, target)
-	if idx < 0 {
-		// Layout names unrecognized: with exactly two layouts the target
-		// is unambiguously the other one.
-		if len(ls.Names) == 2 {
-			idx = 1 - ls.CurrentIdx
-		} else {
-			f.logf(opts, "cannot map target layout %v to names %v, skipping switch", target, ls.Names)
-			return nil
-		}
+	if switched {
+		f.logf(opts, "layout switched to match %q", corrected)
 	}
-	if idx == ls.CurrentIdx {
-		f.logf(opts, "layout %q already active", ls.Names[idx])
-		return nil
-	}
-	f.logf(opts, "switching layout to %q (index %d)", ls.Names[idx], idx)
-	return f.Niri.SwitchLayout(idx)
-}
-
-// findLayoutIndex maps a target layout to its position in the configured
-// layout names (e.g. "English (US)", "Russian").
-func findLayoutIndex(names []string, target layout.Layout) int {
-	for i, name := range names {
-		if layoutNameMatches(name, target) {
-			return i
-		}
-	}
-	return -1
-}
-
-// layoutNameMatches matches a configured layout name against a target
-// layout. Russian is checked first: "russian" contains "us", which would
-// otherwise trip the English heuristics.
-func layoutNameMatches(name string, target layout.Layout) bool {
-	n := strings.ToLower(name)
-	isRussian := strings.Contains(n, "russ") || strings.Contains(n, "рус") ||
-		n == "ru" || strings.HasPrefix(n, "ru-") || strings.HasPrefix(n, "ru_")
-	isEnglish := strings.Contains(n, "engl") || strings.Contains(n, "англ") ||
-		n == "en" || strings.HasPrefix(n, "en-") || strings.HasPrefix(n, "en_") ||
-		strings.Contains(n, "us")
-	if target == layout.LayoutRU {
-		return isRussian
-	}
-	return isEnglish && !isRussian
+	return nil
 }
 
 // sanitizeSelection extracts a single-word candidate from a selection:

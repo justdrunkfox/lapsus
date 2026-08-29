@@ -39,6 +39,15 @@ type Config struct {
 		PauseMs int `toml:"pause_ms"`
 	} `toml:"fix"`
 
+	Daemon struct {
+		// ExcludeAppIDs lists niri app_id values where auto-fix is
+		// disabled (VMs, games, remote desktop...).
+		ExcludeAppIDs []string `toml:"exclude_app_ids"`
+		// BoundaryPauseMs is the idle time after which the buffered word
+		// counts as finished even without a punctuation/space boundary.
+		BoundaryPauseMs int `toml:"boundary_pause_ms"`
+	} `toml:"daemon"`
+
 	Dictionary struct {
 		UserDir string `toml:"user_dir"`
 	} `toml:"dictionary"`
@@ -62,6 +71,7 @@ func Defaults() *Config {
 	c.AutoDetect.Mode = "both"
 	c.Fix.SwitchLayout = true
 	c.Fix.PauseMs = 50
+	c.Daemon.BoundaryPauseMs = 300
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
 	return c
 }
@@ -114,6 +124,10 @@ func (c *Config) Validate() error {
 
 	if c.Fix.PauseMs < 0 || c.Fix.PauseMs > 2000 {
 		issues = append(issues, fmt.Sprintf("fix.pause_ms: must be in [0, 2000], got %d", c.Fix.PauseMs))
+	}
+
+	if c.Daemon.BoundaryPauseMs < 50 || c.Daemon.BoundaryPauseMs > 5000 {
+		issues = append(issues, fmt.Sprintf("daemon.boundary_pause_ms: must be in [50, 5000], got %d", c.Daemon.BoundaryPauseMs))
 	}
 
 	if len(issues) > 0 {

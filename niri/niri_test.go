@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/voev/lapsus/layout"
 )
 
 func testClient(stdout string) *Client {
@@ -80,7 +82,7 @@ func TestKeyboardLayoutsOutOfRange(t *testing.T) {
 	}
 }
 
-func TestIsTerminalApp(t *testing.T) {
+func TestAppIDIn(t *testing.T) {
 	terminals := []string{"foot", "kitty", "Alacritty", "wezterm", "ghostty", "st"}
 	cases := []struct {
 		appID string
@@ -100,8 +102,8 @@ func TestIsTerminalApp(t *testing.T) {
 		{"vscode", false},
 	}
 	for _, c := range cases {
-		if got := IsTerminalApp(c.appID, terminals); got != c.want {
-			t.Errorf("IsTerminalApp(%q) = %v, want %v", c.appID, got, c.want)
+		if got := AppIDIn(c.appID, terminals); got != c.want {
+			t.Errorf("AppIDIn(%q) = %v, want %v", c.appID, got, c.want)
 		}
 	}
 }
@@ -112,5 +114,52 @@ func TestRunnerErrorPropagates(t *testing.T) {
 	}}
 	if _, err := c.FocusedWindow(); err == nil {
 		t.Error("expected runner error to propagate")
+	}
+}
+
+func TestMatchLayoutName(t *testing.T) {
+	// "russian" contains "us" — must count as RU, not EN.
+	if !MatchLayoutName("Russian", layout.LayoutRU) {
+		t.Error("Russian should match RU")
+	}
+	if MatchLayoutName("Russian", layout.LayoutEN) {
+		t.Error("Russian must not match EN despite containing \"us\"")
+	}
+	if !MatchLayoutName("English (US)", layout.LayoutEN) {
+		t.Error("English (US) should match EN")
+	}
+	if MatchLayoutName("English (US)", layout.LayoutRU) {
+		t.Error("English (US) must not match RU")
+	}
+	if !MatchLayoutName("ru", layout.LayoutRU) {
+		t.Error("ru should match RU")
+	}
+}
+
+func TestLayoutIndex(t *testing.T) {
+	names := []string{"English (US)", "Russian"}
+	if got := LayoutIndex(names, layout.LayoutEN); got != 0 {
+		t.Errorf("EN index = %d, want 0", got)
+	}
+	if got := LayoutIndex(names, layout.LayoutRU); got != 1 {
+		t.Errorf("RU index = %d, want 1", got)
+	}
+	if got := LayoutIndex([]string{"German", "French"}, layout.LayoutEN); got != -1 {
+		t.Errorf("unrecognized names should give -1, got %d", got)
+	}
+}
+
+func TestLayoutsCurrent(t *testing.T) {
+	ls := &KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}
+	if l, ok := ls.Current(); !ok || l != layout.LayoutRU {
+		t.Errorf("Current() = %v, %v; want RU, true", l, ok)
+	}
+	ls.CurrentIdx = 0
+	if l, ok := ls.Current(); !ok || l != layout.LayoutEN {
+		t.Errorf("Current() = %v, %v; want EN, true", l, ok)
+	}
+	ls = &KeyboardLayouts{Names: []string{"German", "French"}, CurrentIdx: 0}
+	if _, ok := ls.Current(); ok {
+		t.Error("unrecognized names should give ok=false")
 	}
 }

@@ -1,0 +1,12 @@
+[Unit]
+Description=lapsus: RU/EN layout auto-fixer for niri
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/lapsus daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

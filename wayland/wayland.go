@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // commandTimeout bounds every tool invocation. wl-copy is expected to
@@ -100,6 +101,35 @@ func (t *Tools) TypeText(text string) error {
 	}
 	t.pause()
 	return nil
+}
+
+// DeleteBack presses BackSpace n times in a single wtype invocation.
+func (t *Tools) DeleteBack(n int) error {
+	if n <= 0 {
+		return nil
+	}
+	args := make([]string, 0, 2*n)
+	for i := 0; i < n; i++ {
+		args = append(args, "-k", "BackSpace")
+	}
+	if _, err := t.run("wtype", args, nil); err != nil {
+		return fmt.Errorf("wtype backspace x%d: %w", n, err)
+	}
+	t.pause()
+	return nil
+}
+
+// ReplaceWord replaces the word the caret currently sits right after
+// with corrected: BackSpace × rune-count of old, then type the fix.
+// This is the unified replacement for both the daemon and the terminal
+// path of `lapsus fix`; it requires the caret to be directly after the
+// old word (which is guaranteed when the word was just typed).
+func (t *Tools) ReplaceWord(old, corrected string) error {
+	n := utf8.RuneCountInString(old)
+	if err := t.DeleteBack(n); err != nil {
+		return err
+	}
+	return t.TypeText(corrected)
 }
 
 // ReadPrimary returns the primary selection, or "" if it is empty or

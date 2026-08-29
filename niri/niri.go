@@ -8,9 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/voev/lapsus/analyze"
+	"github.com/voev/lapsus/layout"
 )
 
 // commandTimeout bounds every niri invocation; the compositor answers
@@ -89,6 +94,48 @@ type KeyboardLayouts struct {
 	CurrentIdx int      `json:"current_idx"`
 }
 
+// Current maps the active layout to a lapsus Layout by matching the
+// configured layout name. ok=false when the names are unrecognized.
+func (ls *KeyboardLayouts) Current() (l layout.Layout, ok bool) {
+	if ls.CurrentIdx < 0 || ls.CurrentIdx >= len(ls.Names) {
+		return layout.LayoutEN, false
+	}
+	if MatchLayoutName(ls.Names[ls.CurrentIdx], layout.LayoutRU) {
+		return layout.LayoutRU, true
+	}
+	if MatchLayoutName(ls.Names[ls.CurrentIdx], layout.LayoutEN) {
+		return layout.LayoutEN, true
+	}
+	return layout.LayoutEN, false
+}
+
+// MatchLayoutName matches a configured layout name against a target
+// layout. Russian is checked first: "russian" contains "us", which would
+// otherwise trip the English heuristics.
+func MatchLayoutName(name string, target layout.Layout) bool {
+	n := strings.ToLower(name)
+	isRussian := strings.Contains(n, "russ") || strings.Contains(n, "рус") ||
+		n == "ru" || strings.HasPrefix(n, "ru-") || strings.HasPrefix(n, "ru_")
+	isEnglish := strings.Contains(n, "engl") || strings.Contains(n, "англ") ||
+		n == "en" || strings.HasPrefix(n, "en-") || strings.HasPrefix(n, "en_") ||
+		strings.Contains(n, "us")
+	if target == layout.LayoutRU {
+		return isRussian
+	}
+	return isEnglish && !isRussian
+}
+
+// LayoutIndex maps a target layout to its position among the configured
+// layout names (e.g. "English (US)", "Russian"), or -1 if unrecognized.
+func LayoutIndex(names []string, target layout.Layout) int {
+	for i, name := range names {
+		if MatchLayoutName(name, target) {
+			return i
+		}
+	}
+	return -1
+}
+
 // KeyboardLayouts returns the configured layouts and the active index.
 func (c *Client) KeyboardLayouts() (*KeyboardLayouts, error) {
 	out, err := c.run("msg", "--json", "keyboard-layouts")
@@ -116,17 +163,65 @@ func (c *Client) SwitchLayout(index int) error {
 	return nil
 }
 
-// IsTerminalApp reports whether the app_id matches one of the configured
-// terminal app_ids. Matching is case-insensitive equality: substring
-// matching would make short ids like "st" match "ghostty" or unrelated apps.
-func IsTerminalApp(appID string, terminals []string) bool {
+// SwitchToLayoutOf switches to the layout the text belongs to (by
+// script), so the user continues typing in the layout they meant. Must
+// be called after text injection (niri#3568: virtual keyboard events
+// can reset the layout group). It is a no-op when the target layout is
+// already active or its name is not recognizable.
+func (c *Client) SwitchToLayoutOf(text string) (switched bool, err error) {
+	target := analyze.GuessLayout(text)
+	ls, err := c.KeyboardLayouts()
+	if err != nil {
+		return false, fmt.Errorf("query layouts: %w", err)
+	}
+	idx := LayoutIndex(ls.Names, target)
+	if idx < 0 {
+		// Layout names unrecognized: with exactly two layouts the target
+		// is unambiguously the other one.
+		if len(ls.Names) == 2 {
+			idx = 1 - ls.CurrentIdx
+		} else {
+			return false, nil
+		}
+	}
+	if idx == ls.CurrentIdx {
+		return false, nil
+	}
+	return true, c.SwitchLayout(idx)
+}
+
+// AppIDIn reports whether the app_id matches one of the configured list
+// entries (terminal detection, per-app exclusions). Matching is
+// case-insensitive equality: substring matching would make short ids
+// like "st" match "ghostty" or unrelated apps.
+func AppIDIn(appID string, list []string) bool {
 	if appID == "" {
 		return false
 	}
-	for _, t := range terminals {
+	for _, t := range list {
 		if strings.EqualFold(appID, t) {
 			return true
 		}
 	}
 	return false
+}
+
+// EventStream starts `niri msg --json event-stream` and returns its
+// stdout as newline-delimited JSON events. The process is killed when
+// ctx is cancelled. Not available with an injected Runner (tests drive
+// the daemon's state machine directly instead).
+func (c *Client) EventStream(ctx context.Context) (io.ReadCloser, error) {
+	if c.Run != nil {
+		return nil, errors.New("EventStream is not available with an injected runner")
+	}
+	cmd := exec.CommandContext(ctx, c.binary(), "msg", "--json", "event-stream")
+	cmd.Stderr = os.Stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start niri event-stream: %w", err)
+	}
+	return stdout, nil
 }

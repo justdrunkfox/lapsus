@@ -9,7 +9,6 @@ import (
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
 	"github.com/voev/lapsus/dict"
-	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
 	"github.com/voev/lapsus/wayland"
 )
@@ -38,38 +37,6 @@ func TestSanitizeSelection(t *testing.T) {
 		if ok != c.ok || got != c.want {
 			t.Errorf("sanitizeSelection(%q) = (%q, %v), want (%q, %v)", c.sel, got, ok, c.want, c.ok)
 		}
-	}
-}
-
-func TestFindLayoutIndex(t *testing.T) {
-	names := []string{"English (US)", "Russian"}
-	if got := findLayoutIndex(names, layout.LayoutEN); got != 0 {
-		t.Errorf("EN index = %d, want 0", got)
-	}
-	if got := findLayoutIndex(names, layout.LayoutRU); got != 1 {
-		t.Errorf("RU index = %d, want 1", got)
-	}
-	if got := findLayoutIndex([]string{"German", "French"}, layout.LayoutEN); got != -1 {
-		t.Errorf("unrecognized names should give -1, got %d", got)
-	}
-}
-
-func TestLayoutNameMatches(t *testing.T) {
-	// "russian" contains "us" — must count as RU, not EN.
-	if !layoutNameMatches("Russian", layout.LayoutRU) {
-		t.Error("Russian should match RU")
-	}
-	if layoutNameMatches("Russian", layout.LayoutEN) {
-		t.Error("Russian must not match EN despite containing \"us\"")
-	}
-	if !layoutNameMatches("English (US)", layout.LayoutEN) {
-		t.Error("English (US) should match EN")
-	}
-	if layoutNameMatches("English (US)", layout.LayoutRU) {
-		t.Error("English (US) must not match RU")
-	}
-	if !layoutNameMatches("ru", layout.LayoutRU) {
-		t.Error("ru should match RU")
 	}
 }
 
@@ -236,17 +203,16 @@ func TestFixTerminalPath(t *testing.T) {
 	if err := f.Run(Options{}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Terminal path: copy fix to clipboard, Ctrl+Shift+V paste.
-	if rec.clipboard != "hello" {
-		t.Errorf("clipboard should hold the corrected word, got %q", rec.clipboard)
+	// Terminal path: delete the captured word (5 runes) and type the fix —
+	// no clipboard involvement.
+	if !rec.hasCall("-k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace") {
+		t.Errorf("expected 5 backspaces for %q word, calls: %v", "руддщ", rec.calls)
 	}
-	if !rec.hasCall("-M ctrl -M shift -k v") {
-		t.Errorf("expected terminal paste Ctrl+Shift+V, calls: %v", rec.calls)
+	if !rec.hasCall("wtype -- hello") {
+		t.Errorf("expected the corrected word to be typed, calls: %v", rec.calls)
 	}
-	for _, c := range rec.calls {
-		if strings.HasPrefix(c, "wtype -- ") {
-			t.Errorf("terminal path must paste, not type; got %q", c)
-		}
+	if rec.clipboard != "" {
+		t.Errorf("clipboard must stay untouched in terminal path, got %q", rec.clipboard)
 	}
 	if !nir.hasCall("switch-layout 0") {
 		t.Errorf("expected switch to EN (index 0), niri calls: %v", nir.calls)
