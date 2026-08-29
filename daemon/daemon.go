@@ -264,6 +264,16 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if ev.Value == evdev.ValKeyRepeat {
+		// Held-key autorepeat: the application receives compositor- and
+		// kernel-generated repeats that cannot be counted from evdev,
+		// so the buffer length is no longer trustworthy — and a fix
+		// with a wrong length would delete unrelated text. Drop the
+		// word; tracking resumes with the next one.
+		d.clearBuf()
+		return
+	}
+
 	switch ev.Code {
 	case evdev.KeyLeftShift, evdev.KeyRightShift:
 		d.shift = ev.Value != evdev.ValKeyUp

@@ -378,3 +378,64 @@ func TestDaemonPauseBoundaryDisabledByDefault(t *testing.T) {
 		t.Errorf("word typed across pauses must still be fixed whole, calls: %v", rec.calls)
 	}
 }
+
+func TestDaemonHeldBackspaceInvalidatesBuffer(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	d := newTestDaemon(t, rec, nir, 0)
+	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+
+	// "руддщ", then a HELD backspace: one press plus kernel repeats the
+	// app also acts on. The daemon cannot know how much was deleted.
+	d.typeKeys(keysRuddsh...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyDown})
+	for i := 0; i < 5; i++ {
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyRepeat})
+	}
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyUp})
+
+	// User retypes a word and hits space. The fix must use the length of
+	// the word tracked AFTER the hold (5), not a mix with stale content.
+	d.typeKeys(keysRuddsh...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+
+	if !rec.hasCall("wtype -- hello") {
+		t.Errorf("expected the retyped word to be fixed, calls: %v", rec.calls)
+	}
+	exact5 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
+	exact6 := exact5 + " -k BackSpace"
+	for _, c := range rec.calls {
+		if c == exact6 {
+			t.Errorf("stale buffer inflated the deletion length, calls: %v", rec.calls)
+		}
+		if !strings.HasPrefix(c, "wtype -k BackSpace") {
+			continue
+		}
+		if c != exact5 {
+			t.Errorf("expected exactly 5 backspaces after a held-key edit, got %q", c)
+		}
+	}
+}
+
+func TestDaemonHeldLetterInvalidatesBuffer(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	d := newTestDaemon(t, rec, nir, 0)
+	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+
+	// "рудд" + HELD key (app gets "руддооо", daemon can only see "руддо").
+	d.typeKeys(keysRuddsh[:4]...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyDown})
+	for i := 0; i < 4; i++ {
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyRepeat})
+	}
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyUp})
+
+	// Buffer was invalidated by the hold: the fragment must not be fixed.
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype") {
+			t.Errorf("held-key fragment must not be fixed, got %q", c)
+		}
+	}
+}
