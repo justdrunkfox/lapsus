@@ -307,10 +307,11 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	case isWordChar(ch):
 		d.buf = append(d.buf, ch)
 		d.armPauseTimer()
-	case isFixBoundary(ch):
-		d.finishWord()
 	default:
-		d.clearBuf()
+		// Any printable separator (space, punctuation, quotes, brackets)
+		// completes the word: it is typed as normal text and the word
+		// before it is definitely finished.
+		d.finishWord()
 	}
 }
 
@@ -321,12 +322,17 @@ func (d *Daemon) clearBuf() {
 }
 
 // armPauseTimer (re)starts the idle timer that treats the buffered word
-// as finished. The generation counter discards stale firings after the
-// buffer changed.
+// as finished. It is only armed when the pause boundary is enabled:
+// a non-zero boundary_pause_ms. A too-short pause splits slow-typed
+// words into fragments, so the default is 0 (separators only); the
+// generation counter discards stale firings after the buffer changed.
 func (d *Daemon) armPauseTimer() {
+	pause := time.Duration(d.Cfg.Daemon.BoundaryPauseMs) * time.Millisecond
+	if pause <= 0 {
+		return
+	}
 	d.gen++
 	gen := d.gen
-	pause := time.Duration(d.Cfg.Daemon.BoundaryPauseMs) * time.Millisecond
 	if d.timer != nil {
 		d.timer.Stop()
 	}

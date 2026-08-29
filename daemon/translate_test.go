@@ -63,16 +63,3 @@ func TestCharForNonCharacterKeys(t *testing.T) {
 		}
 	}
 }
-
-func TestIsFixBoundary(t *testing.T) {
-	for _, r := range []rune{' ', ',', '.', ';', '/', '?', '!', ':'} {
-		if !isFixBoundary(r) {
-			t.Errorf("%q should be a fix boundary", r)
-		}
-	}
-	for _, r := range []rune{'-', '=', '[', ']', '\'', '\\', 'a', 'ф'} {
-		if isFixBoundary(r) {
-			t.Errorf("%q must not be a fix boundary", r)
-		}
-	}
-}

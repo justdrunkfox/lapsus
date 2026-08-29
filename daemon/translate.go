@@ -86,19 +86,6 @@ func mapOne(s string) rune {
 	return 0
 }
 
-// isFixBoundary reports whether the character completes a word in a way
-// that is safe to fix after: space and the common sentence punctuation.
-// Everything else that is not a word character clears the buffer without
-// fixing (enter, tab, brackets...) — the typed text may already be
-// committed (enter) or completed (tab).
-func isFixBoundary(r rune) bool {
-	switch r {
-	case ' ', ',', '.', ';', '/', '?', '!', ':':
-		return true
-	}
-	return false
-}
-
 // charFor translates a keycode into the character it produces under the
 // given layout and shift state. ok=false for keys that produce no
 // character (modifiers, arrows, F-keys, numpad...).
@@ -118,7 +105,9 @@ func charFor(code uint16, shift bool, l layout.Layout) (rune, bool) {
 }
 
 // isWordChar reports whether the character participates in the word
-// buffer: letters and digits only.
+// buffer: letters and digits only. Every other produced character is a
+// word separator: it completes the buffer (space, punctuation, quotes,
+// brackets — anything typed as normal text).
 func isWordChar(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }

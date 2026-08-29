@@ -338,3 +338,43 @@ func TestDaemonMinWordLenSkipsFragments(t *testing.T) {
 		}
 	}
 }
+
+func TestDaemonAnyPrintableSeparatorCompletesWord(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// "ghbdtn" closed by ")" (Shift+0): a printable separator completes
+	// the word, the fix replaces only the word — the paren stays.
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 11, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 11, Value: evdev.ValKeyUp})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp})
+
+	if !rec.hasCall("wtype -- привет") {
+		t.Errorf("closing paren should complete the word, calls: %v", rec.calls)
+	}
+}
+
+func TestDaemonPauseBoundaryDisabledByDefault(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// A word typed and abandoned (no separator): nothing must happen,
+	// the buffer just waits for a real separator.
+	d.typeKeys(keysGhbdtn...)
+	time.Sleep(150 * time.Millisecond)
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype") {
+			t.Errorf("pause boundary must be off by default, got %q", c)
+		}
+	}
+
+	// The word survives the pause: a space completes the WHOLE word.
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	if !rec.hasCall("wtype -- привет") {
+		t.Errorf("word typed across pauses must still be fixed whole, calls: %v", rec.calls)
+	}
+}

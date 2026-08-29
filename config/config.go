@@ -44,9 +44,11 @@ type Config struct {
 		// disabled (VMs, games, remote desktop...).
 		ExcludeAppIDs []string `toml:"exclude_app_ids"`
 		// BoundaryPauseMs is the idle time after which the buffered word
-		// counts as finished even without a punctuation/space boundary.
-		// Generous on purpose: a too-short pause splits slow-typed words
-		// into fragments, and a fragment can be "fixed" wrongly.
+		// counts as finished even without a separator. 0 (default)
+		// disables it: words complete only on real separators, so a
+		// thinking pause can never split a word into fragments. A
+		// non-zero value enables the pause boundary at the user's own
+		// risk of fragments.
 		BoundaryPauseMs int `toml:"boundary_pause_ms"`
 		// MinWordLen is the shortest word the daemon will touch. Short
 		// fragments (mid-word pauses, stray letters) are risky to fix
@@ -77,7 +79,7 @@ func Defaults() *Config {
 	c.AutoDetect.Mode = "both"
 	c.Fix.SwitchLayout = true
 	c.Fix.PauseMs = 50
-	c.Daemon.BoundaryPauseMs = 1000
+	c.Daemon.BoundaryPauseMs = 0
 	c.Daemon.MinWordLen = 3
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
 	return c
@@ -133,8 +135,8 @@ func (c *Config) Validate() error {
 		issues = append(issues, fmt.Sprintf("fix.pause_ms: must be in [0, 2000], got %d", c.Fix.PauseMs))
 	}
 
-	if c.Daemon.BoundaryPauseMs < 50 || c.Daemon.BoundaryPauseMs > 5000 {
-		issues = append(issues, fmt.Sprintf("daemon.boundary_pause_ms: must be in [50, 5000], got %d", c.Daemon.BoundaryPauseMs))
+	if ms := c.Daemon.BoundaryPauseMs; ms != 0 && (ms < 50 || ms > 5000) {
+		issues = append(issues, fmt.Sprintf("daemon.boundary_pause_ms: must be 0 (disabled) or in [50, 5000], got %d", ms))
 	}
 
 	if c.Daemon.MinWordLen < 1 || c.Daemon.MinWordLen > 10 {
