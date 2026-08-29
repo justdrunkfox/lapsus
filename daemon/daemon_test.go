@@ -133,9 +133,10 @@ func TestDaemonFixesRUWordTypedInRULayout(t *testing.T) {
 	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySlash, Value: evdev.ValKeyDown})
 
 	// Slash in RU produces '.' — a fix boundary; "руддщ" maps to "hello",
-	// and the original punctuation must be preserved after the fix.
-	if !rec.hasCall("wtype -- hello.") {
-		t.Errorf("expected the corrected word with the original dot, calls: %v", rec.calls)
+	// and the punctuation flips to the other layout along with the word:
+	// RU '.' is the EN '/' key.
+	if !rec.hasCall("wtype -- hello/") {
+		t.Errorf("expected the corrected word with the flipped dot, calls: %v", rec.calls)
 	}
 	if !nir.hasCall("switch-layout 0") {
 		t.Errorf("expected switch to EN, niri calls: %v", nir.calls)
@@ -449,5 +450,35 @@ func TestDaemonHeldLetterInvalidatesBuffer(t *testing.T) {
 		if strings.HasPrefix(c, "wtype") {
 			t.Errorf("held-key fragment must not be fixed, got %q", c)
 		}
+	}
+}
+
+func TestDaemonSeparatorFlipsLikeTheWord(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	d := newTestDaemon(t, rec, nir, 0)
+	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+
+	// User on RU layout presses Shift+/ (produces ','), meaning the EN
+	// question mark: "руддщ," must become "hello?" — the separator flips
+	// to the other layout along with the word.
+	d.typeKeys(keysRuddsh...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyUp})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp})
+
+	if !rec.hasCall("wtype -- hello?") {
+		t.Errorf("expected comma to flip to ?, calls: %v", rec.calls)
+	}
+	exact6 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
+	found := false
+	for _, c := range rec.calls {
+		if c == exact6 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 6 backspaces (word+separator), calls: %v", rec.calls)
 	}
 }

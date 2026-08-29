@@ -404,14 +404,18 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 		d.logf("dry run: would replace %q with %q", word, corrected)
 		return
 	}
-	// The separator sits between the word and the caret, so it must be
-	// deleted together with the word and typed back after the fix
-	// (rfr<space> otherwise becomes r<fix> — the space eats one
-	// BackSpace).
+	// The separator sits between the word and the caret: delete it with
+	// the word and type it back after the fix — flipped to the corrected
+	// word's layout, same as the word itself. The user pressed the same
+	// physical keys while intending the other layout: RU-typed "руддщ,"
+	// (Shift+/ → «,») must become "hello?" — the comma was what the wrong
+	// layout produced, "?" is what the user meant.
 	old, fixed := word, corrected
 	if sep != 0 {
+		target := analyze.GuessLayout(corrected)
+		flipped := layout.Map(string(sep), d.cur, target)
 		old += string(sep)
-		fixed += string(sep)
+		fixed += flipped
 	}
 	if err := d.Way.ReplaceWord(old, fixed); err != nil {
 		d.logf("inject failed: %v", err)

@@ -100,3 +100,17 @@ func TestGuessLayout(t *testing.T) {
 		}
 	}
 }
+
+func TestFlipsTrailingPunctuation(t *testing.T) {
+	a := New(newTestDict())
+	// RU-typed Shift+/ produces ',' — the user meant the EN '?'.
+	corrected, needs := a.Analyze("руддщ,", layout.LayoutRU)
+	if !needs || corrected != "hello?" {
+		t.Errorf("Analyze(руддщ,, RU) = %q, %v; want %q, true", corrected, needs, "hello?")
+	}
+	// Dots, parens and spaces that are the same in both layouts survive.
+	corrected, needs = a.Analyze("(ghbdtn)", layout.LayoutEN)
+	if !needs || corrected != "(привет)" {
+		t.Errorf("Analyze((ghbdtn), EN) = %q, %v; want %q, true", corrected, needs, "(привет)")
+	}
+}

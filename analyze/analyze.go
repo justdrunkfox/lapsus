@@ -38,8 +38,14 @@ func GuessLayout(text string) layout.Layout {
 
 // Analyze checks if a word was typed in the wrong layout and returns the
 // corrected version. needsFix is true if the word should be replaced.
+//
+// Leading and trailing punctuation is preserved, but flipped to the
+// other layout along with the word: the user pressed the same physical
+// keys while intending the other layout, so RU-typed "руддщ," (Shift+/
+// on ЙЦУКЕН) becomes "hello?" — the comma is what that key produces in
+// the wrong layout, and "?" is what the user meant.
 func (a *Analyzer) Analyze(word string, currentLayout layout.Layout) (corrected string, needsFix bool) {
-	// Strip trailing/leading punctuation, preserve it
+	// Strip trailing/leading punctuation, preserve it flipped.
 	leading, core, trailing := stripPunctuation(word)
 
 	// Map the core word to the other layout
@@ -62,13 +68,13 @@ func (a *Analyzer) Analyze(word string, currentLayout layout.Layout) (corrected 
 	// If the mapped version is a known word in the other layout, and the
 	// original is NOT a known word in the current layout, it's likely wrong.
 	if mappedScore > 0 && origScore == 0 {
-		return leading + mapped + trailing, true
+		return layout.Map(leading, currentLayout, otherLayout) + mapped + layout.Map(trailing, currentLayout, otherLayout), true
 	}
 
 	// If both are known words, prefer the higher score.
 	// Threshold: mapped must score at least 2x the original to override.
 	if mappedScore > 0 && origScore > 0 && mappedScore >= origScore*2 {
-		return leading + mapped + trailing, true
+		return layout.Map(leading, currentLayout, otherLayout) + mapped + layout.Map(trailing, currentLayout, otherLayout), true
 	}
 
 	return word, false
