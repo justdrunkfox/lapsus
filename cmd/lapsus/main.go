@@ -64,6 +64,7 @@ Usage:
   lapsus fix [flags]        one-shot: fix the last typed word (bind to an niri hotkey)
       -n, --dry-run         report what would happen, change nothing
       -v, --verbose         log each step to stderr
+      -s, --selection       fix the current selection (word or phrase)
   lapsus daemon [flags]     auto-fix: watch keystrokes, fix at word boundaries
       -n, --dry-run         log fixes without injecting them
       -v, --verbose         log each step to stderr
@@ -112,10 +113,12 @@ func runDaemonCommand(args []string) {
 // was typed in the wrong layout.
 func runFixCommand(args []string) {
 	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
-	var dryRun, verbose bool
+	var dryRun, verbose, selection bool
 	fs.BoolVar(&dryRun, "dry-run", false, "report what would happen, change nothing")
 	fs.BoolVar(&dryRun, "n", false, "shorthand for --dry-run")
 	fs.BoolVar(&verbose, "v", false, "log each step to stderr")
+	fs.BoolVar(&selection, "selection", false, "fix the current selection (word or phrase) instead of the word at the caret")
+	fs.BoolVar(&selection, "s", false, "shorthand for --selection")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -141,7 +144,7 @@ func runFixCommand(args []string) {
 		Niri: &niri.Client{},
 		Way:  &wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond},
 	}
-	err = fixer.Run(fix.Options{DryRun: dryRun, Verbose: verbose})
+	err = fixer.Run(fix.Options{DryRun: dryRun, Verbose: verbose, PreSelected: selection})
 	if err == nil || errors.Is(err, fix.ErrBusy) {
 		// ErrBusy means the hotkey was pressed while a previous fix is
 		// still running; staying quiet is the right response.

@@ -39,6 +39,11 @@ type Options struct {
 	DryRun bool
 	// Verbose: log each step to stderr.
 	Verbose bool
+	// PreSelected: fix the user's existing selection (word or phrase)
+	// instead of the word at the caret. Bind to a separate hotkey:
+	// guessing "is there a live selection?" from the primary selection
+	// is unreliable — it outlives the window it was made in.
+	PreSelected bool
 }
 
 // Fixer carries the fix pipeline dependencies.
@@ -66,26 +71,32 @@ func (f *Fixer) Run(opts Options) error {
 	terminal := niri.AppIDIn(appID, f.Cfg.Hotkey.Terminals)
 	f.logf(opts, "focused window %d app_id=%q terminal=%v", win.ID, appID, terminal)
 
+	if opts.PreSelected {
+		if terminal {
+			// In terminals the mouse selection is already the primary
+			// selection; the same path works.
+			return f.fixTerminal(opts)
+		}
+		sel := f.Way.ReadPrimary()
+		if sel == "" {
+			return errors.New("nothing is selected")
+		}
+		return f.fixPreSelected(sel, opts)
+	}
 	if terminal {
 		return f.fixTerminal(opts)
 	}
 	return f.fixGUI(opts)
 }
 
-// fixGUI is the path for regular GUI text fields. If the user has an
-// active selection (mouse or Shift+arrows), it is fixed as-is; otherwise
-// the word left of the caret is selected and fixed.
+// fixGUI is the path for regular GUI text fields: select the word left
+// of the caret, read the primary selection, analyze, type the fix over
+// the selection. The primary selection is deliberately cleared first and
+// never trusted before the synthetic selection — it may hold a leftover
+// from a completely different window.
 func (f *Fixer) fixGUI(opts Options) error {
 	if f.Cfg.Capture.Method == "cut" {
 		return f.fixGUICut(opts)
-	}
-
-	// An active selection reaches the daemon as the primary selection.
-	// Respect it when present; otherwise fall back to the word at the
-	// caret. GUI toolkits clear the primary when the selection collapses,
-	// so an empty read reliably means "no user selection".
-	if pre := f.Way.ReadPrimary(); pre != "" {
-		return f.fixPreSelected(pre, opts)
 	}
 
 	f.Way.ClearPrimary()
@@ -125,31 +136,79 @@ func (f *Fixer) fixGUI(opts Options) error {
 }
 
 // fixPreSelected fixes a selection the user made themselves (mouse or
-// Shift+arrows). The selection is left completely alone when there is
-// nothing to fix or the selection is not a single replaceable word.
+// Shift+arrows). Single words are fixed as one; multi-word selections
+// are converted word by word. The selection is left completely alone
+// when there is nothing to fix or the selection is not convertible text.
 func (f *Fixer) fixPreSelected(sel string, opts Options) error {
-	word, ok := sanitizeSelection(sel)
-	if !ok {
-		return fmt.Errorf("selection is not a single word (%d bytes), leaving it untouched", len(sel))
+	if word, ok := sanitizeSelection(sel); ok && !strings.ContainsAny(word, " \t") {
+		f.logf(opts, "using existing selection %q", word)
+		corrected, needsFix := f.decide(word)
+		if !needsFix {
+			f.logf(opts, "no fix needed for %q", word)
+			return nil
+		}
+		if opts.DryRun {
+			f.logf(opts, "dry run: would replace %q with %q", word, corrected)
+			return nil
+		}
+		if err := f.Way.TypeText(corrected); err != nil {
+			return err
+		}
+		f.Way.ClearPrimary()
+		return f.switchLayoutAfter(corrected, opts)
 	}
-	f.logf(opts, "using existing selection %q", word)
 
-	corrected, needsFix := f.decide(word)
-	if !needsFix {
-		f.logf(opts, "no fix needed for %q", word)
+	// Not a single word: convert the whole phrase word by word.
+	phrase, ok := sanitizePhrase(sel)
+	if !ok {
+		return fmt.Errorf("selection is not convertible text (%d bytes), leaving it untouched", len(sel))
+	}
+	f.logf(opts, "using existing selection (phrase, %d bytes)", len(sel))
+	corrected, changed := f.convertPhrase(phrase)
+	if !changed {
+		f.logf(opts, "no fix needed for %q", phrase)
 		return nil
 	}
 	if opts.DryRun {
-		f.logf(opts, "dry run: would replace %q with %q", word, corrected)
+		f.logf(opts, "dry run: would replace %q with %q", phrase, corrected)
 		return nil
 	}
-
-	// Typing replaces the active selection in GUI applications.
 	if err := f.Way.TypeText(corrected); err != nil {
 		return err
 	}
 	f.Way.ClearPrimary()
 	return f.switchLayoutAfter(corrected, opts)
+}
+
+// convertPhrase converts each word of the phrase independently and
+// reports whether anything changed. Whitespace runs are preserved.
+func (f *Fixer) convertPhrase(phrase string) (string, bool) {
+	var out strings.Builder
+	changed := false
+	flushWord := func(word string) {
+		if word == "" {
+			return
+		}
+		corrected, needsFix := f.decide(word)
+		if needsFix {
+			changed = true
+			out.WriteString(corrected)
+		} else {
+			out.WriteString(word)
+		}
+	}
+	var word strings.Builder
+	for _, r := range phrase {
+		if r == ' ' || r == '\t' {
+			flushWord(word.String())
+			word.Reset()
+			out.WriteRune(r)
+			continue
+		}
+		word.WriteRune(r)
+	}
+	flushWord(word.String())
+	return out.String(), changed
 }
 
 // fixGUICut is the fallback for applications that do not update the
@@ -245,6 +304,29 @@ func (f *Fixer) switchLayoutAfter(corrected string, opts Options) error {
 		f.logf(opts, "layout switched to match %q", corrected)
 	}
 	return nil
+}
+
+// maxPhraseLen bounds the multi-word selection we are willing to
+// convert; a huge selection (select-all) is refused as suspicious.
+const maxPhraseLen = 256
+
+// sanitizePhrase validates a multi-word single-line selection for
+// word-by-word conversion: no internal line breaks, sane size, no
+// control characters.
+func sanitizePhrase(sel string) (phrase string, ok bool) {
+	if sel == "" {
+		return "", false
+	}
+	trimmed := strings.TrimRight(sel, " \t\n\r")
+	if strings.ContainsRune(trimmed, '\n') || len(trimmed) > maxPhraseLen || trimmed == "" {
+		return "", false
+	}
+	for _, r := range trimmed {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return trimmed, true
 }
 
 // sanitizeSelection extracts a single-word candidate from a selection:

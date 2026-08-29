@@ -298,7 +298,7 @@ func TestFixGUIPreSelectedWord(t *testing.T) {
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}}
 	f := newTestFixer(t, rec, nir)
 
-	if err := f.Run(Options{}); err != nil {
+	if err := f.Run(Options{PreSelected: true}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// The user's own selection is replaced by typing — no word selection
@@ -319,7 +319,7 @@ func TestFixGUIPreSelectedNoFixLeavesSelection(t *testing.T) {
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
 
-	if err := f.Run(Options{}); err != nil {
+	if err := f.Run(Options{PreSelected: true}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, c := range rec.calls {
@@ -329,12 +329,43 @@ func TestFixGUIPreSelectedNoFixLeavesSelection(t *testing.T) {
 	}
 }
 
+func TestFixGUIPreSelectedPhrase(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"ghbdtn vbh"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{PreSelected: true}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rec.hasCall("wtype -- привет мир") {
+		t.Errorf("phrase should be converted word by word, calls: %v", rec.calls)
+	}
+	if rec.hasCall("-k Left") {
+		t.Errorf("no word-at-caret selection expected, calls: %v", rec.calls)
+	}
+}
+
+func TestFixGUIPreSelectedPhraseNoChanges(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"hello world"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{PreSelected: true}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype -- ") {
+			t.Errorf("real words must stay untouched, got %q", c)
+		}
+	}
+}
+
 func TestFixGUIPreSelectedMultiLineRefused(t *testing.T) {
 	rec := &recorder{primaryResponses: []string{"two\nwords"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
 
-	if err := f.Run(Options{}); err == nil {
+	if err := f.Run(Options{PreSelected: true}); err == nil {
 		t.Fatal("multi-line selection must be refused")
 	}
 	for _, c := range rec.calls {
