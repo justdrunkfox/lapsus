@@ -101,9 +101,20 @@ func TestDaemonFixesENWordTypedInENLayout(t *testing.T) {
 	if !rec.hasCall("wtype -- привет") {
 		t.Errorf("expected the corrected word to be typed, calls: %v", rec.calls)
 	}
-	// Unified replacement: BackSpace ×6 for "ghbdtn".
-	if !rec.hasCall("-k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace") {
-		t.Errorf("expected 6 backspaces, calls: %v", rec.calls)
+	// Unified replacement: BackSpace ×7 for "ghbdtn"+space, the fix is
+	// typed with the trailing space restored.
+	exact7 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
+	found7 := false
+	for _, c := range rec.calls {
+		if c == exact7 {
+			found7 = true
+		}
+	}
+	if !found7 {
+		t.Errorf("expected 7 backspaces (word+space), calls: %v", rec.calls)
+	}
+	if !rec.hasCall("wtype -- привет ") {
+		t.Errorf("expected the separator to be re-typed, calls: %v", rec.calls)
 	}
 	// Layout must switch to Russian for the next word.
 	if !nir.hasCall("switch-layout 1") {
@@ -121,9 +132,10 @@ func TestDaemonFixesRUWordTypedInRULayout(t *testing.T) {
 	d.typeKeys(keysRuddsh...)
 	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySlash, Value: evdev.ValKeyDown})
 
-	// Slash in RU produces ',' — a fix boundary; the word "руддщ" maps to "hello".
-	if !rec.hasCall("wtype -- hello") {
-		t.Errorf("expected the corrected word to be typed, calls: %v", rec.calls)
+	// Slash in RU produces '.' — a fix boundary; "руддщ" maps to "hello",
+	// and the original punctuation must be preserved after the fix.
+	if !rec.hasCall("wtype -- hello.") {
+		t.Errorf("expected the corrected word with the original dot, calls: %v", rec.calls)
 	}
 	if !nir.hasCall("switch-layout 0") {
 		t.Errorf("expected switch to EN, niri calls: %v", nir.calls)
@@ -213,8 +225,8 @@ func TestDaemonBackspaceShrinksWord(t *testing.T) {
 	if !rec.hasCall("wtype -- hell") {
 		t.Errorf("expected the shortened word to be fixed, calls: %v", rec.calls)
 	}
-	// Exactly 4 backspaces in one wtype call.
-	exact := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
+	// Exactly 5 backspaces in one wtype call (word + space).
+	exact := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
 	found := false
 	for _, c := range rec.calls {
 		if c == exact {
@@ -222,7 +234,7 @@ func TestDaemonBackspaceShrinksWord(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected a call with exactly 4 backspaces, calls: %v", rec.calls)
+		t.Errorf("expected a call with exactly 5 backspaces (word+space), calls: %v", rec.calls)
 	}
 }
 
@@ -402,17 +414,17 @@ func TestDaemonHeldBackspaceInvalidatesBuffer(t *testing.T) {
 	if !rec.hasCall("wtype -- hello") {
 		t.Errorf("expected the retyped word to be fixed, calls: %v", rec.calls)
 	}
-	exact5 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
-	exact6 := exact5 + " -k BackSpace"
+	exact6 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
+	exact7 := exact6 + " -k BackSpace"
 	for _, c := range rec.calls {
-		if c == exact6 {
+		if c == exact7 {
 			t.Errorf("stale buffer inflated the deletion length, calls: %v", rec.calls)
 		}
 		if !strings.HasPrefix(c, "wtype -k BackSpace") {
 			continue
 		}
-		if c != exact5 {
-			t.Errorf("expected exactly 5 backspaces after a held-key edit, got %q", c)
+		if c != exact6 {
+			t.Errorf("expected exactly 6 backspaces (word+space) after a held-key edit, got %q", c)
 		}
 	}
 }

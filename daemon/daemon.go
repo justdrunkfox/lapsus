@@ -320,8 +320,9 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	default:
 		// Any printable separator (space, punctuation, quotes, brackets)
 		// completes the word: it is typed as normal text and the word
-		// before it is definitely finished.
-		d.finishWord()
+		// before it is definitely finished. The separator itself is
+		// passed along so the fix can restore it.
+		d.finishWord(ch)
 	}
 }
 
@@ -352,26 +353,32 @@ func (d *Daemon) armPauseTimer() {
 		if gen != d.gen {
 			return
 		}
-		d.finishWord()
+		d.finishWord(0)
 	})
 }
 
-// finishWord takes the buffered word and tries to fix it. The boundary
-// character (space, comma...) has already reached the application and
-// stays where it is. Caller must hold d.mu.
-func (d *Daemon) finishWord() {
+// finishWord takes the buffered word and tries to fix it. sep is the
+// separator character that completed the word (0 for the pause boundary):
+// it has already reached the application and sits between the word and
+// the caret, so the fix must delete and re-type it as well. Caller must
+// hold d.mu.
+func (d *Daemon) finishWord(sep rune) {
 	if len(d.buf) == 0 {
 		return
 	}
 	word := string(d.buf)
 	d.clearBuf()
-	d.logf("word %q complete", word)
-	d.maybeFix(word)
+	if sep != 0 {
+		d.logf("word %q complete (sep %q)", word, sep)
+	} else {
+		d.logf("word %q complete (pause)", word)
+	}
+	d.maybeFix(word, sep)
 }
 
 // maybeFix decides whether the word must be corrected and injects the
 // fix. Caller must hold d.mu.
-func (d *Daemon) maybeFix(word string) {
+func (d *Daemon) maybeFix(word string, sep rune) {
 	if d.paused {
 		d.logf("paused, skipping %q", word)
 		return
@@ -397,7 +404,16 @@ func (d *Daemon) maybeFix(word string) {
 		d.logf("dry run: would replace %q with %q", word, corrected)
 		return
 	}
-	if err := d.Way.ReplaceWord(word, corrected); err != nil {
+	// The separator sits between the word and the caret, so it must be
+	// deleted together with the word and typed back after the fix
+	// (rfr<space> otherwise becomes r<fix> — the space eats one
+	// BackSpace).
+	old, fixed := word, corrected
+	if sep != 0 {
+		old += string(sep)
+		fixed += string(sep)
+	}
+	if err := d.Way.ReplaceWord(old, fixed); err != nil {
 		d.logf("inject failed: %v", err)
 		return
 	}
