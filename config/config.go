@@ -45,7 +45,13 @@ type Config struct {
 		ExcludeAppIDs []string `toml:"exclude_app_ids"`
 		// BoundaryPauseMs is the idle time after which the buffered word
 		// counts as finished even without a punctuation/space boundary.
+		// Generous on purpose: a too-short pause splits slow-typed words
+		// into fragments, and a fragment can be "fixed" wrongly.
 		BoundaryPauseMs int `toml:"boundary_pause_ms"`
+		// MinWordLen is the shortest word the daemon will touch. Short
+		// fragments (mid-word pauses, stray letters) are risky to fix
+		// automatically; the manual hotkey path has no such limit.
+		MinWordLen int `toml:"min_word_len"`
 	} `toml:"daemon"`
 
 	Dictionary struct {
@@ -71,7 +77,8 @@ func Defaults() *Config {
 	c.AutoDetect.Mode = "both"
 	c.Fix.SwitchLayout = true
 	c.Fix.PauseMs = 50
-	c.Daemon.BoundaryPauseMs = 300
+	c.Daemon.BoundaryPauseMs = 1000
+	c.Daemon.MinWordLen = 3
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
 	return c
 }
@@ -128,6 +135,10 @@ func (c *Config) Validate() error {
 
 	if c.Daemon.BoundaryPauseMs < 50 || c.Daemon.BoundaryPauseMs > 5000 {
 		issues = append(issues, fmt.Sprintf("daemon.boundary_pause_ms: must be in [50, 5000], got %d", c.Daemon.BoundaryPauseMs))
+	}
+
+	if c.Daemon.MinWordLen < 1 || c.Daemon.MinWordLen > 10 {
+		issues = append(issues, fmt.Sprintf("daemon.min_word_len: must be in [1, 10], got %d", c.Daemon.MinWordLen))
 	}
 
 	if len(issues) > 0 {

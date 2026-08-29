@@ -320,3 +320,21 @@ func mustLayouts(t *testing.T, json_ string) *niri.KeyboardLayouts {
 	}
 	return ls
 }
+
+func TestDaemonMinWordLenSkipsFragments(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	d := newTestDaemon(t, rec, nir, 300)
+
+	// "kf" maps to "ла" (a known RU word), but 2 runes < min_word_len=3:
+	// the daemon must not touch it (e.g. it is a fragment of a word
+	// split by a mid-word pause).
+	d.typeKeys([]uint16{36, 33}...) // k, f
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype") {
+			t.Errorf("fragment must not be auto-fixed, got %q", c)
+		}
+	}
+}

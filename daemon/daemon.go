@@ -21,6 +21,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
@@ -361,6 +362,14 @@ func (d *Daemon) maybeFix(word string) {
 	}
 	if niri.AppIDIn(d.appID, d.Cfg.Daemon.ExcludeAppIDs) {
 		d.logf("app %q excluded, skipping %q", d.appID, word)
+		return
+	}
+	// Short words are risky to fix automatically: a mid-word pause can
+	// split a word into fragments, and single letters map to real
+	// one-letter Russian words ("c" → "с"). The manual hotkey path has
+	// no such limit — there the intent is explicit.
+	if utf8.RuneCountInString(word) < d.Cfg.Daemon.MinWordLen {
+		d.logf("word %q shorter than min_word_len=%d, skipping", word, d.Cfg.Daemon.MinWordLen)
 		return
 	}
 	corrected, needsFix := d.Ana.Analyze(word, d.cur)
