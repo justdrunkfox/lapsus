@@ -191,3 +191,13 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 		t.Errorf("roundtrip mismatch: %+v", loaded)
 	}
 }
+
+func TestSaveCreatesMissingDir(t *testing.T) {
+	path := t.TempDir() + "/lapsus/nested/config.toml" // dir does not exist
+	if err := Save(path, Defaults()); err != nil {
+		t.Fatalf("Save into missing dir: %v", err)
+	}
+	if _, err := LoadFile(path); err != nil {
+		t.Fatalf("saved config unreadable: %v", err)
+	}
+}

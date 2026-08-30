@@ -6,9 +6,11 @@ package tray
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 
 	"github.com/energye/systray"
 	"github.com/voev/lapsus/layout"
@@ -77,20 +79,30 @@ func (t *Tray) onReady() {
 		if t.sound != "" {
 			newSound = ""
 		}
-		if err := t.ctrl.SetFeedback(t.notify, newSound); err == nil {
-			t.sound = newSound
-			t.syncMenu()
+		if err := t.ctrl.SetFeedback(t.notify, newSound); err != nil {
+			feedbackError(err)
+			return
 		}
+		t.sound = newSound
+		t.syncMenu()
 	})
 	t.mNotify.Click(func() {
-		if err := t.ctrl.SetFeedback(!t.notify, t.sound); err == nil {
-			t.notify = !t.notify
-			t.syncMenu()
+		if err := t.ctrl.SetFeedback(!t.notify, t.sound); err != nil {
+			feedbackError(err)
+			return
 		}
+		t.notify = !t.notify
+		t.syncMenu()
 	})
 	mQuit.Click(func() {
 		t.ctrl.Quit()
 	})
+}
+
+// feedbackError reports a failed settings persist to stderr (journal);
+// the toggle stays in its previous state, which is what syncMenu shows.
+func feedbackError(err error) {
+	fmt.Fprintln(os.Stderr, "lapsus tray: settings not saved:", err)
 }
 
 // syncMenu updates checkbox states from the tray's cached settings.

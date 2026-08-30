@@ -109,6 +109,9 @@ func Defaults() *Config {
 // Save writes the config back to a TOML file (used by the tray toggles
 // to persist runtime switches).
 func Save(path string, c *Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
 	data, err := toml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
