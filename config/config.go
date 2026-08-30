@@ -60,6 +60,8 @@ type Config struct {
 		// fragments (mid-word pauses, stray letters) are risky to fix
 		// automatically; the manual hotkey path has no such limit.
 		MinWordLen int `toml:"min_word_len"`
+		// Tray shows the tray icon with layout flag and toggles.
+		Tray bool `toml:"tray"`
 	} `toml:"daemon"`
 
 	Feedback struct {
@@ -101,6 +103,16 @@ func Defaults() *Config {
 	c.Feedback.Sound = "bell"
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
 	return c
+}
+
+// Save writes the config back to a TOML file (used by the tray toggles
+// to persist runtime switches).
+func Save(path string, c *Config) error {
+	data, err := toml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 // Parse parses TOML bytes into a Config, merging with defaults.

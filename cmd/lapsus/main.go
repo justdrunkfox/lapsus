@@ -20,6 +20,7 @@ import (
 	"github.com/voev/lapsus/fix"
 	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
+	"github.com/voev/lapsus/tray"
 	"github.com/voev/lapsus/wayland"
 )
 
@@ -103,10 +104,46 @@ func runDaemonCommand(args []string) {
 	dm := daemon.New(cfg, analyze.New(d), &niri.Client{},
 		&wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond},
 		verbose, dryRun)
-	if err := dm.Run(context.Background()); err != nil {
+	dm.ConfigPath = lapsusConfigPath()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if cfg.Daemon.Tray {
+		ctrl := &daemonCtl{dm: dm, cancel: cancel}
+		tr := tray.New(ctrl)
+		dm.OnLayoutChange = tr.UpdateIcon
+		dm.OnPauseChange = tr.UpdatePause
+		go tr.Run(ctx)
+	}
+	if err := dm.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "lapsus daemon:", err)
 		os.Exit(1)
 	}
+}
+
+// daemonCtl adapts the daemon to the tray controller interface and owns
+// the daemon lifetime (Quit cancels the context).
+type daemonCtl struct {
+	dm     *daemon.Daemon
+	cancel context.CancelFunc
+}
+
+func (c *daemonCtl) Paused() bool                 { return c.dm.Paused() }
+func (c *daemonCtl) SetPaused(p bool)             { c.dm.SetPaused(p) }
+func (c *daemonCtl) CurrentLayout() layout.Layout { return c.dm.CurrentLayout() }
+func (c *daemonCtl) Feedback() (bool, string)     { return c.dm.Feedback() }
+func (c *daemonCtl) SetFeedback(notify bool, sound string) error {
+	return c.dm.SetFeedback(notify, sound)
+}
+func (c *daemonCtl) Quit() { c.cancel() }
+
+// lapsusConfigPath mirrors loadConfig's path for persisting toggles.
+func lapsusConfigPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "lapsus", "config.toml")
 }
 
 // runFixCommand implements `lapsus fix`: capture the last typed word in

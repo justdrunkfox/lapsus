@@ -50,6 +50,15 @@ type Daemon struct {
 	Verbose bool
 	DryRun  bool
 
+	// ConfigPath is where toggles (tray) persist feedback settings;
+	// empty disables persistence.
+	ConfigPath string
+
+	// OnLayoutChange and OnPauseChange are notified outside the lock
+	// (used by the tray to redraw its icon and checkboxes).
+	OnLayoutChange func(l layout.Layout)
+	OnPauseChange  func(paused bool)
+
 	mu      sync.Mutex
 	devices map[string]bool
 	shift   bool
@@ -91,12 +100,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go func() {
 		for range sig {
 			d.TogglePause()
-			d.mu.Lock()
 			state := "running"
-			if d.paused {
+			if d.Paused() {
 				state = "paused"
 			}
-			d.mu.Unlock()
 			fmt.Fprintf(os.Stderr, "lapsus daemon: %s\n", state)
 		}
 	}()
@@ -131,9 +138,10 @@ func (d *Daemon) refreshNiriState() {
 // characters from different layouts do not mix into a fixable word.
 func (d *Daemon) setLayouts(ls *niri.KeyboardLayouts) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	var cur layout.Layout
 	if l, ok := ls.Current(); ok {
-		d.cur = l
+		cur = l
+		d.cur = cur
 		d.warned = false
 	} else if !d.warned {
 		d.warned = true
@@ -141,6 +149,10 @@ func (d *Daemon) setLayouts(ls *niri.KeyboardLayouts) {
 	}
 	d.buf = nil
 	d.gen++
+	d.mu.Unlock()
+	if d.OnLayoutChange != nil {
+		d.OnLayoutChange(cur)
+	}
 }
 
 // watchNiri keeps the event stream open, tracking layout switches and
@@ -438,7 +450,54 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 
 // TogglePause flips the paused state.
 func (d *Daemon) TogglePause() {
+	d.SetPaused(!d.Paused())
+}
+
+// Paused reports whether auto-fixing is currently paused.
+func (d *Daemon) Paused() bool {
 	d.mu.Lock()
-	d.paused = !d.paused
+	defer d.mu.Unlock()
+	return d.paused
+}
+
+// SetPaused turns daemon auto-fixing on/off.
+func (d *Daemon) SetPaused(p bool) {
+	d.mu.Lock()
+	d.paused = p
 	d.mu.Unlock()
+	if d.OnPauseChange != nil {
+		d.OnPauseChange(p)
+	}
+}
+
+// CurrentLayout returns the active layout the daemon translates
+// keystrokes with.
+func (d *Daemon) CurrentLayout() layout.Layout {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.cur
+}
+
+// Feedback returns the current feedback settings.
+func (d *Daemon) Feedback() (notify bool, sound string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.Cfg.Feedback.Notify, d.Cfg.Feedback.Sound
+}
+
+// SetFeedback flips feedback settings: applies them to the running
+// daemon immediately and persists them to ConfigPath when set.
+func (d *Daemon) SetFeedback(notify bool, sound string) error {
+	d.mu.Lock()
+	d.Cfg.Feedback.Notify = notify
+	d.Cfg.Feedback.Sound = sound
+	if d.FB != nil {
+		d.FB.Notify = notify
+		d.FB.Sound = sound
+	}
+	d.mu.Unlock()
+	if d.ConfigPath == "" {
+		return nil
+	}
+	return config.Save(d.ConfigPath, d.Cfg)
 }

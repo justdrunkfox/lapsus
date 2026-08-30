@@ -4,8 +4,9 @@
 
 ## Окружение
 
-- Go ≥ 1.26, только stdlib + `pelletier/go-toml/v2`. **CGO запрещён** —
-  нужна чистая кросс-компиляция из macOS (`GOOS=linux GOARCH=amd64|arm64`).
+- Go ≥ 1.26, stdlib + `pelletier/go-toml/v2` + `energye/systray` (трей,
+  тянет `godbus/dbus/v5`) — всё pure Go. **CGO запрещён** — нужна чистая
+  кросс-компиляция (`GOOS=linux GOARCH=amd64|arm64`).
 - Целевая машина: linux + niri (Wayland). На ней проверять всё, что
   касается клавиатуры/буфера/IPC.
 - Проверки перед коммитом: `go vet ./... && go test ./...`

@@ -166,3 +166,21 @@ func TestDefaultsFeedback(t *testing.T) {
 		t.Errorf("default feedback.sound = %q, want bell", c.Feedback.Sound)
 	}
 }
+
+func TestSaveLoadRoundtrip(t *testing.T) {
+	path := t.TempDir() + "/config.toml"
+	c := Defaults()
+	c.Feedback.Notify = false
+	c.Feedback.Sound = ""
+	c.Daemon.MinWordLen = 4
+	if err := Save(path, c); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if loaded.Feedback.Notify || loaded.Feedback.Sound != "" || loaded.Daemon.MinWordLen != 4 {
+		t.Errorf("roundtrip mismatch: %+v", loaded)
+	}
+}
