@@ -159,6 +159,13 @@ func TestValidatePauseMs(t *testing.T) {
 
 func TestDefaultsFeedback(t *testing.T) {
 	c := Defaults()
+	if !c.Daemon.Tray {
+		t.Error("default daemon.tray should be true")
+	}
+}
+
+func TestDefaultsFeedbackValues(t *testing.T) {
+	c := Defaults()
 	if !c.Feedback.Notify {
 		t.Error("default feedback.notify should be true")
 	}
