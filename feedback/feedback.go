@@ -38,7 +38,9 @@ func (f *F) Fire(from, to string) {
 	}
 	msg := truncate(from+" → "+to, 80)
 	if f.Notify {
-		f.spawn("notify-send", []string{"-a", "lapsus", "lapsus", msg})
+		// -t: auto-expire; without it the notification daemon stacks
+		// every flip forever (DMS keeps them in the center).
+		f.spawn("notify-send", []string{"-a", "lapsus", "-t", "2500", "lapsus", msg})
 	}
 	if path := f.soundPath(); path != "" {
 		if player := soundPlayer(); player != "" {

@@ -82,11 +82,6 @@ func (t *Tools) Paste() error {
 	return t.combo("v", "ctrl")
 }
 
-// PasteTerminal pastes the clipboard in terminals (Ctrl+Shift+V).
-func (t *Tools) PasteTerminal() error {
-	return t.combo("v", "ctrl", "shift")
-}
-
 // CollapseSelection presses Right, collapsing the selection back to a
 // caret at the original position.
 func (t *Tools) CollapseSelection() error {
@@ -152,31 +147,11 @@ func (t *Tools) ReadClipboard() string {
 	return string(out)
 }
 
-// CopyClipboard copies text to the clipboard. wl-copy forks into the
-// background to keep serving the selection.
-func (t *Tools) CopyClipboard(text string) error {
-	if _, err := t.run("wl-copy", nil, []byte(text)); err != nil {
-		return fmt.Errorf("wl-copy: %w", err)
-	}
-	t.pause()
-	return nil
-}
-
 // ClearPrimary empties the primary selection so a stale selection can
 // not leak into the next read.
 func (t *Tools) ClearPrimary() error {
 	if _, err := t.run("wl-copy", []string{"--primary", "--clear"}, nil); err != nil {
 		return fmt.Errorf("wl-copy --primary --clear: %w", err)
-	}
-	t.pause()
-	return nil
-}
-
-// ClearClipboard empties the regular clipboard (used after the cut path,
-// so the cut-out original does not linger in the clipboard).
-func (t *Tools) ClearClipboard() error {
-	if _, err := t.run("wl-copy", []string{"--clear"}, nil); err != nil {
-		return fmt.Errorf("wl-copy --clear: %w", err)
 	}
 	t.pause()
 	return nil

@@ -30,6 +30,9 @@ func TestFireSendsNotification(t *testing.T) {
 	if !cap.has("notify-send") || !cap.has("ghbdtn → привет") {
 		t.Errorf("notification expected, calls: %v", cap.calls)
 	}
+	if !cap.has("-t 2500") {
+		t.Errorf("notification must auto-expire (-t), calls: %v", cap.calls)
+	}
 	if len(cap.calls) != 1 {
 		t.Errorf("sound must be off by default, calls: %v", cap.calls)
 	}
