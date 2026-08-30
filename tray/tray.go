@@ -24,6 +24,8 @@ type Controller interface {
 	CurrentLayout() layout.Layout
 	Feedback() (notify bool, sound string)
 	SetFeedback(notify bool, sound string) error
+	RememberLayout() bool
+	SetRememberLayout(bool)
 	Quit()
 }
 
@@ -31,9 +33,10 @@ type Controller interface {
 type Tray struct {
 	ctrl Controller
 
-	mAuto   *systray.MenuItem
-	mSound  *systray.MenuItem
-	mNotify *systray.MenuItem
+	mAuto     *systray.MenuItem
+	mRemember *systray.MenuItem
+	mSound    *systray.MenuItem
+	mNotify   *systray.MenuItem
 
 	paused bool
 	sound  string
@@ -64,6 +67,8 @@ func (t *Tray) onReady() {
 
 	t.mAuto = systray.AddMenuItemCheckbox("Автопереключение",
 		"Авто-фикс слов по словарям (демон)", !t.paused)
+	t.mRemember = systray.AddMenuItemCheckbox("Запоминать язык окон",
+		"При фокусе окна возвращать язык, на котором в нём печатали", t.ctrl.RememberLayout())
 	t.mSound = systray.AddMenuItemCheckbox("Звук",
 		"Звук при перевороте", t.sound != "")
 	t.mNotify = systray.AddMenuItemCheckbox("Нотификации",
@@ -73,6 +78,10 @@ func (t *Tray) onReady() {
 
 	t.mAuto.Click(func() {
 		t.ctrl.SetPaused(!t.ctrl.Paused())
+	})
+	t.mRemember.Click(func() {
+		t.ctrl.SetRememberLayout(!t.ctrl.RememberLayout())
+		t.syncMenu()
 	})
 	t.mSound.Click(func() {
 		// Toggle between off and the last used (or default) sound.
@@ -122,6 +131,11 @@ func (t *Tray) syncMenu() {
 		t.mNotify.Check()
 	} else {
 		t.mNotify.Uncheck()
+	}
+	if t.ctrl.RememberLayout() {
+		t.mRemember.Check()
+	} else {
+		t.mRemember.Uncheck()
 	}
 }
 

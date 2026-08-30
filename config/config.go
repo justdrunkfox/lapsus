@@ -62,6 +62,10 @@ type Config struct {
 		MinWordLen int `toml:"min_word_len"`
 		// Tray shows the tray icon with layout flag and toggles.
 		Tray bool `toml:"tray"`
+		// RememberWindowLayout restores, on window focus, the language
+		// last typed in that application (learned passively from
+		// keystrokes, per app_id).
+		RememberWindowLayout bool `toml:"remember_window_layout"`
 	} `toml:"daemon"`
 
 	Feedback struct {
@@ -100,6 +104,7 @@ func Defaults() *Config {
 	c.Daemon.MinWordLen = 3
 	c.Daemon.SwitchLayout = false
 	c.Daemon.Tray = true
+	c.Daemon.RememberWindowLayout = true
 	c.Feedback.Notify = true
 	c.Feedback.Sound = "bell"
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")

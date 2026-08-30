@@ -59,16 +59,17 @@ type Daemon struct {
 	OnLayoutChange func(l layout.Layout)
 	OnPauseChange  func(paused bool)
 
-	mu      sync.Mutex
-	devices map[string]bool
-	shift   bool
-	buf     []rune
-	gen     uint64
-	timer   *time.Timer
-	cur     layout.Layout
-	appID   string
-	paused  bool
-	warned  bool
+	mu         sync.Mutex
+	devices    map[string]bool
+	appLayouts map[string]layout.Layout // app_id → last typed layout
+	shift      bool
+	buf        []rune
+	gen        uint64
+	timer      *time.Timer
+	cur        layout.Layout
+	appID      string
+	paused     bool
+	warned     bool
 }
 
 // New builds a Daemon; Run blocks until its context is cancelled.
@@ -82,10 +83,11 @@ func New(cfg *config.Config, ana *analyze.Analyzer, nir *niri.Client, way *wayla
 			Notify: cfg.Feedback.Notify,
 			Sound:  cfg.Feedback.Sound,
 		},
-		Verbose: verbose,
-		DryRun:  dryRun,
-		devices: map[string]bool{},
-		cur:     layout.LayoutEN,
+		Verbose:    verbose,
+		DryRun:     dryRun,
+		devices:    map[string]bool{},
+		appLayouts: map[string]layout.Layout{},
+		cur:        layout.LayoutEN,
 	}
 }
 
@@ -223,6 +225,7 @@ func (d *Daemon) handleStreamEvent(line string) {
 		if ls, err := d.Niri.KeyboardLayouts(); err == nil {
 			d.setLayouts(ls)
 		}
+		d.restoreAppLayout()
 	}
 }
 
@@ -331,6 +334,7 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		d.clearBuf() // F-keys, numpad, media keys, anything untranslatable
 		return
 	}
+	d.learnAppLayout()
 	switch {
 	case isWordChar(ch):
 		d.buf = append(d.buf, ch)
@@ -446,6 +450,62 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 			d.logf("cannot switch layout: %v", err)
 		}
 	}
+}
+
+// learnAppLayout remembers which language the user types in per
+// application (app_id), so the layout can be restored on focus. Caller
+// must hold d.mu.
+func (d *Daemon) learnAppLayout() {
+	if !d.Cfg.Daemon.RememberWindowLayout || d.appID == "" {
+		return
+	}
+	d.appLayouts[d.appID] = d.cur
+}
+
+// restoreAppLayout switches the focused window to the language last
+// typed in this application, when it differs from the current one.
+func (d *Daemon) restoreAppLayout() {
+	if !d.Cfg.Daemon.RememberWindowLayout {
+		return
+	}
+	d.mu.Lock()
+	app := d.appID
+	remembered, ok := d.appLayouts[app]
+	cur := d.cur
+	d.mu.Unlock()
+	if !ok || remembered == cur || app == "" {
+		return
+	}
+	if niri.AppIDIn(app, d.Cfg.Daemon.ExcludeAppIDs) {
+		return
+	}
+	ls, err := d.Niri.KeyboardLayouts()
+	if err != nil {
+		return
+	}
+	if idx := niri.LayoutIndex(ls.Names, remembered); idx >= 0 && idx != ls.CurrentIdx {
+		d.logf("restoring %q layout for app %q", remembered, app)
+		if err := d.Niri.SwitchLayout(idx); err != nil {
+			d.logf("layout restore failed: %v", err)
+		}
+	}
+}
+
+// RememberLayout reports whether per-application layout memory is on.
+func (d *Daemon) RememberLayout() bool {
+	return d.Cfg.Daemon.RememberWindowLayout
+}
+
+// SetRememberLayout toggles per-application layout memory and persists
+// the setting to ConfigPath when set.
+func (d *Daemon) SetRememberLayout(on bool) error {
+	d.mu.Lock()
+	d.Cfg.Daemon.RememberWindowLayout = on
+	d.mu.Unlock()
+	if d.ConfigPath == "" {
+		return nil
+	}
+	return config.Save(d.ConfigPath, d.Cfg)
 }
 
 // TogglePause flips the paused state.

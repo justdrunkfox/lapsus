@@ -135,7 +135,9 @@ func (c *daemonCtl) Feedback() (bool, string)     { return c.dm.Feedback() }
 func (c *daemonCtl) SetFeedback(notify bool, sound string) error {
 	return c.dm.SetFeedback(notify, sound)
 }
-func (c *daemonCtl) Quit() { c.cancel() }
+func (c *daemonCtl) RememberLayout() bool      { return c.dm.RememberLayout() }
+func (c *daemonCtl) SetRememberLayout(on bool) { c.dm.SetRememberLayout(on) }
+func (c *daemonCtl) Quit()                     { c.cancel() }
 
 // lapsusConfigPath mirrors loadConfig's path for persisting toggles.
 func lapsusConfigPath() string {

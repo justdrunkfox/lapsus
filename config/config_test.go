@@ -162,6 +162,9 @@ func TestDefaultsFeedback(t *testing.T) {
 	if !c.Daemon.Tray {
 		t.Error("default daemon.tray should be true")
 	}
+	if !c.Daemon.RememberWindowLayout {
+		t.Error("default daemon.remember_window_layout should be true")
+	}
 }
 
 func TestDefaultsFeedbackValues(t *testing.T) {
