@@ -357,7 +357,9 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 				Callback: nil,
 			},
 			"Id": {
-				Value:    "1",
+				// lapsus patch: app identity shown by some bars as the
+				// popup header (was "1").
+				Value:    "lapsus",
 				Writable: false,
 				Emit:     prop.EmitTrue,
 				Callback: nil,
