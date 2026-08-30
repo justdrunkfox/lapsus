@@ -62,8 +62,8 @@ func (t *Tray) onReady() {
 	systray.SetTitle("lapsus")
 	systray.SetTooltip("lapsus — RU/EN layout fixer")
 
-	t.mAuto = systray.AddMenuItemCheckbox("Автопереключение по словарям",
-		"Чинить слова автоматически на границе слова", !t.paused)
+	t.mAuto = systray.AddMenuItemCheckbox("Автопереключение",
+		"Авто-фикс слов по словарям (демон)", !t.paused)
 	t.mSound = systray.AddMenuItemCheckbox("Звук",
 		"Звук при перевороте", t.sound != "")
 	t.mNotify = systray.AddMenuItemCheckbox("Нотификации",
