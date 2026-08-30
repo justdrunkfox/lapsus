@@ -32,8 +32,9 @@
 Бинд в `~/.config/niri/config.kdl`:
 
 ```kdl
-// правый Alt превращён в Compose-клавишу (compose:ralt), потому что
-// клавишу-модификатор соло в niri забиндить нельзя
+// Fn на ThinkPad приходит как XF86WakeUp (key 151); правый Alt превращён
+// в Compose-клавишу (compose:ralt), потому что клавишу-модификатор соло
+// в niri забиндить нельзя
 input {
     keyboard {
         xkb {
@@ -42,8 +43,10 @@ input {
     }
 }
 binds {
-    Multi_key      { spawn "lapsus" "fix"; }              // слово у каретки
-    Ctrl+Multi_key { spawn "lapsus" "fix" "--selection"; } // выделенное
+    XF86WakeUp      { spawn "lapsus" "fix"; }              // слово у каретки
+    Ctrl+XF86WakeUp { spawn "lapsus" "fix" "--selection"; } // выделенное
+    Multi_key       { spawn "lapsus" "fix"; }              // правый Alt — то же
+    Ctrl+Multi_key  { spawn "lapsus" "fix" "--selection"; }
 }
 ```
 
