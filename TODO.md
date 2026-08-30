@@ -118,6 +118,9 @@ CGO запрещён). Архитектурный контекст — README.md
       (notify-send, пакет libnotify-bin) и звук (pw-play/paplay,
       "bell" = freedesktop bell.oga) при каждом перевороте, демон и
       хоткей; best-effort, таймаут 2с, никогда не ломает пайплайн.
+      Левый клик по иконке тоже открывает меню — ItemIsMenu=true
+      (SNI spec): energye хардкодит false, поэтому systray скопирован
+      в third_party/ с патчем одной строки и replace в go.mod.
       УРОК (2026-08-30): фидбек молчал у юзера — (а) Defaults не задавал
       Feedback.Notify/Sound, (б) FB.Fire был лишь в 2 из 4 точек, (в)
       daemon.tray=true не попал в дефолты — все три раза тихо не совпали
