@@ -132,15 +132,10 @@ func runFixCommand(args []string) {
 		fmt.Fprintln(os.Stderr, "lapsus fix:", err)
 		os.Exit(1)
 	}
-	d := dict.New()
-	if err := d.LoadUserDict(cfg.Dictionary.UserDir); err != nil {
-		fmt.Fprintln(os.Stderr, "lapsus fix:", err)
-		os.Exit(1)
-	}
+	// No dictionaries here on purpose: the hotkey is an unconditional
+	// toggle, which keeps the spawn fast.
 	fixer := &fix.Fixer{
 		Cfg:  cfg,
-		Dict: d,
-		Ana:  analyze.New(d),
 		Niri: &niri.Client{},
 		Way:  &wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond},
 	}

@@ -1,8 +1,10 @@
-// Package fix implements the one-shot "fix the last typed word" pipeline
-// triggered by an niri hotkey: select the word, read it back, analyze,
-// inject the corrected word, then switch the layout (always after the
-// injection — niri#3568: virtual keyboard events can reset the layout
-// group).
+// Package fix implements the one-shot hotkey pipeline for niri: flip the
+// word at the caret (or the selection) to the other layout positionally —
+// unconditionally, without consulting dictionaries; this is an explicit
+// user action, a toggle. The layout then follows the flipped word
+// (always after the injection — niri#3568: virtual keyboard events can
+// reset the layout group). The dictionary-based conservative fixing
+// lives in the daemon.
 package fix
 
 import (
@@ -15,7 +17,7 @@ import (
 
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
-	"github.com/voev/lapsus/dict"
+	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
 	"github.com/voev/lapsus/wayland"
 )
@@ -46,13 +48,20 @@ type Options struct {
 	PreSelected bool
 }
 
-// Fixer carries the fix pipeline dependencies.
+// Fixer carries the hotkey pipeline dependencies.
 type Fixer struct {
 	Cfg  *config.Config
-	Dict *dict.Dict
-	Ana  *analyze.Analyzer
 	Niri *niri.Client
 	Way  *wayland.Tools
+}
+
+// convertWord flips the word — with its edge punctuation — to the other
+// layout positionally. changed=false when nothing maps (digits, symbols
+// from the same keys in both layouts).
+func convertWord(word string) (flipped string, changed bool) {
+	current := analyze.GuessLayout(word)
+	flipped = layout.Map(word, current, layout.Other(current))
+	return flipped, flipped != word
 }
 
 // Run executes one fix attempt against the focused window.
@@ -116,14 +125,27 @@ func (f *Fixer) fixGUI(opts Options) error {
 	}
 	f.logf(opts, "captured %q", word)
 
-	corrected, needsFix := f.decide(word)
-	if !needsFix {
+	return f.toggleWord(word, opts, func() {
 		f.Way.CollapseSelection()
-		f.logf(opts, "no fix needed for %q", word)
+	})
+}
+
+// toggleWord replaces word with its other-layout flip and switches the
+// layout along. after is called when there is nothing to flip (the
+// caret-selected word contains no mappable characters).
+func (f *Fixer) toggleWord(word string, opts Options, after func()) error {
+	corrected, changed := convertWord(word)
+	if !changed {
+		if after != nil {
+			after()
+		}
+		f.logf(opts, "nothing to flip in %q", word)
 		return nil
 	}
 	if opts.DryRun {
-		f.Way.CollapseSelection()
+		if after != nil {
+			after()
+		}
 		f.logf(opts, "dry run: would replace %q with %q", word, corrected)
 		return nil
 	}
@@ -142,20 +164,8 @@ func (f *Fixer) fixGUI(opts Options) error {
 func (f *Fixer) fixPreSelected(sel string, opts Options) error {
 	if word, ok := sanitizeSelection(sel); ok && !strings.ContainsAny(word, " \t") {
 		f.logf(opts, "using existing selection %q", word)
-		corrected, needsFix := f.decide(word)
-		if !needsFix {
-			f.logf(opts, "no fix needed for %q", word)
-			return nil
-		}
-		if opts.DryRun {
-			f.logf(opts, "dry run: would replace %q with %q", word, corrected)
-			return nil
-		}
-		if err := f.Way.TypeText(corrected); err != nil {
-			return err
-		}
-		f.Way.ClearPrimary()
-		return f.switchLayoutAfter(corrected, opts)
+		// after=nil: on a no-op the user's selection is left untouched.
+		return f.toggleWord(word, opts, nil)
 	}
 
 	// Not a single word: convert the whole phrase word by word.
@@ -166,7 +176,7 @@ func (f *Fixer) fixPreSelected(sel string, opts Options) error {
 	f.logf(opts, "using existing selection (phrase, %d bytes)", len(sel))
 	corrected, changed := f.convertPhrase(phrase)
 	if !changed {
-		f.logf(opts, "no fix needed for %q", phrase)
+		f.logf(opts, "nothing to flip in %q", phrase)
 		return nil
 	}
 	if opts.DryRun {
@@ -180,8 +190,9 @@ func (f *Fixer) fixPreSelected(sel string, opts Options) error {
 	return f.switchLayoutAfter(corrected, opts)
 }
 
-// convertPhrase converts each word of the phrase independently and
-// reports whether anything changed. Whitespace runs are preserved.
+// convertPhrase flips each word of the phrase independently (positional,
+// like the toggle) and reports whether anything changed. Whitespace runs
+// are preserved.
 func (f *Fixer) convertPhrase(phrase string) (string, bool) {
 	var out strings.Builder
 	changed := false
@@ -189,8 +200,8 @@ func (f *Fixer) convertPhrase(phrase string) (string, bool) {
 		if word == "" {
 			return
 		}
-		corrected, needsFix := f.decide(word)
-		if needsFix {
+		corrected, changed_ := convertWord(word)
+		if changed_ {
 			changed = true
 			out.WriteString(corrected)
 		} else {
@@ -230,24 +241,8 @@ func (f *Fixer) fixGUICut(opts Options) error {
 		return errors.New("no single-word selection after cut")
 	}
 	f.logf(opts, "captured %q", word)
-
-	corrected, needsFix := f.decide(word)
-	if !needsFix {
-		f.Way.Paste()
-		f.logf(opts, "no fix needed for %q", word)
-		return nil
-	}
-	if opts.DryRun {
-		f.Way.Paste()
-		f.logf(opts, "dry run: would replace %q with %q", word, corrected)
-		return nil
-	}
-
-	if err := f.Way.TypeText(corrected); err != nil {
-		return err
-	}
-	f.Way.ClearClipboard()
-	return f.switchLayoutAfter(corrected, opts)
+	// after: on a no-op paste the cut word back to restore the text.
+	return f.toggleWord(word, opts, func() { f.Way.Paste() })
 }
 
 // fixTerminal is the path for terminals: they do not update the primary
@@ -262,9 +257,9 @@ func (f *Fixer) fixTerminal(opts Options) error {
 	}
 	f.logf(opts, "captured %q", word)
 
-	corrected, needsFix := f.decide(word)
-	if !needsFix {
-		f.logf(opts, "no fix needed for %q", word)
+	corrected, changed := convertWord(word)
+	if !changed {
+		f.logf(opts, "nothing to flip in %q", word)
 		return nil
 	}
 	if opts.DryRun {
@@ -277,13 +272,6 @@ func (f *Fixer) fixTerminal(opts Options) error {
 	}
 	f.Way.ClearPrimary()
 	return f.switchLayoutAfter(corrected, opts)
-}
-
-// decide analyzes the word and returns the corrected form, or needsFix=false
-// when the dictionaries are not confident enough.
-func (f *Fixer) decide(word string) (corrected string, needsFix bool) {
-	current := analyze.GuessLayout(word)
-	return f.Ana.Analyze(word, current)
 }
 
 // switchLayoutAfter switches to the layout of the corrected text, so the

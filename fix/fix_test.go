@@ -6,9 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
-	"github.com/voev/lapsus/dict"
 	"github.com/voev/lapsus/niri"
 	"github.com/voev/lapsus/wayland"
 )
@@ -115,11 +113,8 @@ func newTestFixer(t *testing.T, rec *recorder, nir *fakeNiri) *Fixer {
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.Fix.PauseMs = 0
-	d := dict.New()
 	return &Fixer{
 		Cfg:  cfg,
-		Dict: d,
-		Ana:  analyze.New(d),
 		Niri: &niri.Client{Run: nir.run},
 		Way:  &wayland.Tools{Run: rec.run},
 	}
@@ -174,7 +169,7 @@ func TestFixGUIHappyPath(t *testing.T) {
 	}
 }
 
-func TestFixGUINoFixNeeded(t *testing.T) {
+func TestFixGUITogglesRealWordsToo(t *testing.T) {
 	rec := &recorder{primaryResponses: []string{"", "hello"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
@@ -182,16 +177,26 @@ func TestFixGUINoFixNeeded(t *testing.T) {
 	if err := f.Run(Options{}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, c := range rec.calls {
-		if strings.HasPrefix(c, "wtype -- ") {
-			t.Errorf("nothing should be typed when no fix is needed, but got %q", c)
-		}
+	// The hotkey is an unconditional toggle: even a dictionary word flips.
+	if !rec.hasCall("wtype -- руддщ") {
+		t.Errorf("real word should flip as well, calls: %v", rec.calls)
 	}
-	if !rec.hasCall("-k Right") {
-		t.Errorf("selection should be collapsed with Right, calls: %v", rec.calls)
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("layout should follow the flipped word, niri calls: %v", nir.calls)
 	}
-	if nir.hasCall("switch-layout") {
-		t.Error("layout must not switch when no fix is applied")
+}
+
+func TestFixGUIFlipsWordsNotInDictionary(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"", "xkqzjw"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// "xkqzjw" is in no dictionary — the toggle flips it anyway.
+	if !rec.hasCall("wtype -- члйяоц") {
+		t.Errorf("non-dictionary word should flip, calls: %v", rec.calls)
 	}
 }
 
@@ -314,7 +319,7 @@ func TestFixGUIPreSelectedWord(t *testing.T) {
 	}
 }
 
-func TestFixGUIPreSelectedNoFixLeavesSelection(t *testing.T) {
+func TestFixGUIPreSelectedFlipsRealWord(t *testing.T) {
 	rec := &recorder{primaryResponses: []string{"hello"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
@@ -322,10 +327,8 @@ func TestFixGUIPreSelectedNoFixLeavesSelection(t *testing.T) {
 	if err := f.Run(Options{PreSelected: true}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, c := range rec.calls {
-		if strings.HasPrefix(c, "wtype") {
-			t.Errorf("nothing to fix — selection must stay untouched, got %q", c)
-		}
+	if !rec.hasCall("wtype -- руддщ") {
+		t.Errorf("selection mode is a toggle too, calls: %v", rec.calls)
 	}
 }
 
@@ -345,7 +348,7 @@ func TestFixGUIPreSelectedPhrase(t *testing.T) {
 	}
 }
 
-func TestFixGUIPreSelectedPhraseNoChanges(t *testing.T) {
+func TestFixGUIPreSelectedPhraseToggles(t *testing.T) {
 	rec := &recorder{primaryResponses: []string{"hello world"}}
 	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
 	f := newTestFixer(t, rec, nir)
@@ -353,10 +356,8 @@ func TestFixGUIPreSelectedPhraseNoChanges(t *testing.T) {
 	if err := f.Run(Options{PreSelected: true}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, c := range rec.calls {
-		if strings.HasPrefix(c, "wtype -- ") {
-			t.Errorf("real words must stay untouched, got %q", c)
-		}
+	if !rec.hasCall("wtype -- руддщ цщкдв") {
+		t.Errorf("phrase should flip word by word, calls: %v", rec.calls)
 	}
 }
 
