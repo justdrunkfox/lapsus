@@ -11,8 +11,10 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"time"
 
 	"github.com/energye/systray"
+	dbus "github.com/godbus/dbus/v5"
 	"github.com/voev/lapsus/layout"
 )
 
@@ -57,7 +59,34 @@ func (t *Tray) Run(ctx context.Context) {
 		<-ctx.Done()
 		systray.Quit()
 	}()
+	waitWatcher(ctx)
 	systray.Run(t.onReady, nil)
+}
+
+// waitWatcher blocks until a StatusNotifierWatcher appears on the bus.
+// At session start the daemon races the shell: without this wait the
+// one-shot registration fires before the tray host is up and the icon
+// never appears (registration is not retried by the systray library).
+func waitWatcher(ctx context.Context) {
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		return
+	}
+	obj := conn.Object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+	for {
+		call := obj.Call("org.freedesktop.DBus.NameHasOwner", 0, "org.kde.StatusNotifierWatcher")
+		if call.Err == nil {
+			var has bool
+			if err := call.Store(&has); err == nil && has {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func (t *Tray) onReady() {
