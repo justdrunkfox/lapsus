@@ -16,6 +16,7 @@ import (
 	"github.com/voev/lapsus/config"
 	"github.com/voev/lapsus/daemon"
 	"github.com/voev/lapsus/dict"
+	"github.com/voev/lapsus/feedback"
 	"github.com/voev/lapsus/fix"
 	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
@@ -138,6 +139,10 @@ func runFixCommand(args []string) {
 		Cfg:  cfg,
 		Niri: &niri.Client{},
 		Way:  &wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond},
+		FB: &feedback.F{
+			Notify: cfg.Feedback.Notify,
+			Sound:  cfg.Feedback.Sound,
+		},
 	}
 	err = fixer.Run(fix.Options{DryRun: dryRun, Verbose: verbose, PreSelected: selection})
 	if err == nil || errors.Is(err, fix.ErrBusy) {

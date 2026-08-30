@@ -17,6 +17,7 @@ import (
 
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
+	"github.com/voev/lapsus/feedback"
 	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
 	"github.com/voev/lapsus/wayland"
@@ -53,6 +54,7 @@ type Fixer struct {
 	Cfg  *config.Config
 	Niri *niri.Client
 	Way  *wayland.Tools
+	FB   *feedback.F
 }
 
 // convertWord flips the word — with its edge punctuation — to the other
@@ -187,6 +189,7 @@ func (f *Fixer) fixPreSelected(sel string, opts Options) error {
 		return err
 	}
 	f.Way.ClearPrimary()
+	f.FB.Fire(phrase, corrected)
 	return f.switchLayoutAfter(corrected, opts)
 }
 
@@ -275,6 +278,7 @@ func (f *Fixer) fixTerminal(opts Options) error {
 		return err
 	}
 	f.Way.ClearPrimary()
+	f.FB.Fire(word, corrected)
 	return f.switchLayoutAfter(corrected, opts)
 }
 

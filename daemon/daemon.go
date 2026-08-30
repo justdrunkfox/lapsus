@@ -26,6 +26,7 @@ import (
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
 	"github.com/voev/lapsus/evdev"
+	"github.com/voev/lapsus/feedback"
 	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
 	"github.com/voev/lapsus/wayland"
@@ -45,6 +46,7 @@ type Daemon struct {
 	Ana     *analyze.Analyzer
 	Niri    *niri.Client
 	Way     *wayland.Tools
+	FB      *feedback.F
 	Verbose bool
 	DryRun  bool
 
@@ -63,10 +65,15 @@ type Daemon struct {
 // New builds a Daemon; Run blocks until its context is cancelled.
 func New(cfg *config.Config, ana *analyze.Analyzer, nir *niri.Client, way *wayland.Tools, verbose, dryRun bool) *Daemon {
 	return &Daemon{
-		Cfg:     cfg,
-		Ana:     ana,
-		Niri:    nir,
-		Way:     way,
+		Cfg:  cfg,
+		Ana:  ana,
+		Niri: nir,
+		Way:  way,
+		FB: &feedback.F{
+			Notify: cfg.Feedback.Notify,
+			Sound:  cfg.Feedback.Sound,
+			Reap:   true,
+		},
 		Verbose: verbose,
 		DryRun:  dryRun,
 		devices: map[string]bool{},
@@ -422,6 +429,7 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 		return
 	}
 	d.logf("fixed %q → %q", word, corrected)
+	d.FB.Fire(word, corrected)
 	if d.Cfg.Daemon.SwitchLayout {
 		if _, err := d.Niri.SwitchToLayoutOf(corrected); err != nil {
 			d.logf("cannot switch layout: %v", err)

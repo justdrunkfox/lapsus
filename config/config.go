@@ -62,6 +62,15 @@ type Config struct {
 		MinWordLen int `toml:"min_word_len"`
 	} `toml:"daemon"`
 
+	Feedback struct {
+		// Notify pops a desktop notification after a flip
+		// (needs libnotify-bin: sudo apt install libnotify-bin).
+		Notify bool `toml:"notify"`
+		// Sound is a path to an audio file or "bell" for the
+		// freedesktop bell; "" disables sound.
+		Sound string `toml:"sound"`
+	} `toml:"feedback"`
+
 	Dictionary struct {
 		UserDir string `toml:"user_dir"`
 	} `toml:"dictionary"`

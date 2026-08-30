@@ -231,6 +231,12 @@ method = "clipboard"     # clipboard (primary selection) | cut (Ctrl+X-фолб�
 switch_layout = true     # переключать раскладку на язык исправленного слова
 pause_ms      = 50       # пауза после синтетических нажатий (wtype)
 
+[feedback]
+notify = true          # системная нотификация при перевороте
+                       # (нужен пакет: sudo apt install libnotify-bin)
+sound  = "bell"        # звук: "bell" (freedesktop), путь к файлу
+                       # или "" чтобы выключить
+
 [daemon]
 exclude_app_ids    = []   # app_id, где авто-фикс выключен (VM, игры, RDP)
 switch_layout      = false # демон не трогает раскладку вовсе: он чинит
