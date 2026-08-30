@@ -181,9 +181,15 @@ func (t *Tray) UpdatePause(paused bool) {
 	t.syncMenu()
 }
 
-// flagPNG renders the layout flag as a 32x32 PNG, dimmed when paused.
+const (
+	iconSize   = 32
+	iconRadius = 7
+)
+
+// flagPNG renders the layout flag as a 32x32 PNG with rounded corners,
+// dimmed when paused.
 func flagPNG(l layout.Layout, dimmed bool) []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	img := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
 	switch l {
 	case layout.LayoutRU:
 		drawRU(img)
@@ -200,6 +206,9 @@ func flagPNG(l layout.Layout, dimmed bool) []byte {
 	return buf.Bytes()
 }
 
+// FlagPNGForCheck exposes flagPNG for visual verification tooling.
+func FlagPNGForCheck() []byte { return flagPNG(layout.LayoutRU, false) }
+
 // drawRU paints the russian tricolor.
 func drawRU(img *image.RGBA) {
 	bands := [3]color.RGBA{
@@ -211,6 +220,9 @@ func drawRU(img *image.RGBA) {
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		band := bands[(y-b.Min.Y)*3/b.Dy()]
 		for x := b.Min.X; x < b.Max.X; x++ {
+			if !inRoundedRect(x, y, b) {
+				continue
+			}
 			img.Set(x, y, band)
 		}
 	}
@@ -226,6 +238,9 @@ func drawUS(img *image.RGBA) {
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		stripe := (y-b.Min.Y)*13/b.Dy()%2 == 0
 		for x := b.Min.X; x < b.Max.X; x++ {
+			if !inRoundedRect(x, y, b) {
+				continue
+			}
 			c := white
 			if stripe {
 				c = red
@@ -236,6 +251,31 @@ func drawUS(img *image.RGBA) {
 			img.Set(x, y, c)
 		}
 	}
+}
+
+// inRoundedRect reports whether the pixel belongs to the rounded
+// rectangle covering the image bounds (corner circles of iconRadius).
+func inRoundedRect(x, y int, b image.Rectangle) bool {
+	if x < b.Min.X || y < b.Min.Y || x >= b.Max.X || y >= b.Max.Y {
+		return false
+	}
+	r := iconRadius
+	w, h := b.Dx(), b.Dy()
+	cx, cy := -1, -1
+	if x < r && y < r {
+		cx, cy = b.Min.X+r, b.Min.Y+r
+	} else if x >= w-r && y < r {
+		cx, cy = b.Min.X+w-r-1, b.Min.Y+r
+	} else if x < r && y >= h-r {
+		cx, cy = b.Min.X+r, b.Min.Y+h-r-1
+	} else if x >= w-r && y >= h-r {
+		cx, cy = b.Min.X+w-r-1, b.Min.Y+h-r-1
+	}
+	if cx < 0 {
+		return true
+	}
+	dx, dy := x-cx, y-cy
+	return dx*dx+dy*dy <= r*r
 }
 
 // darken dims the icon (paused auto-fixing).
