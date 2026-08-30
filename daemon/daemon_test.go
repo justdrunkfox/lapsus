@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,15 +35,26 @@ func (r *recorder) hasCall(substr string) bool {
 
 type fakeNiri struct {
 	calls []string
-	// layoutJSON is returned for keyboard-layouts queries.
-	layoutJSON string
+	appID string
+	// cur is the layout index the fake reports and mutates on
+	// switch-layout, so refetches reflect the daemon's own switches.
+	cur int
 }
 
 func (f *fakeNiri) run(name string, args ...string) ([]byte, error) {
 	joined := name + " " + strings.Join(args, " ")
 	f.calls = append(f.calls, joined)
+	if strings.Contains(joined, "focused-window") {
+		return []byte(fmt.Sprintf(`{"id":1,"app_id":%q,"is_focused":true}`, f.appID)), nil
+	}
 	if strings.Contains(joined, "keyboard-layouts") {
-		return []byte(f.layoutJSON), nil
+		return []byte(fmt.Sprintf(`{"names":["English (US)","Russian"],"current_idx":%d}`, f.cur)), nil
+	}
+	if strings.Contains(joined, "switch-layout") {
+		fields := strings.Fields(joined)
+		if idx, err := strconv.Atoi(fields[len(fields)-1]); err == nil {
+			f.cur = idx
+		}
 	}
 	return nil, nil
 }
@@ -94,7 +107,7 @@ var (
 
 func TestDaemonFixesENWordTypedInENLayout(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
 	// User types "ghbdtn " while EN is active (meant Russian).
@@ -127,9 +140,9 @@ func TestDaemonFixesENWordTypedInENLayout(t *testing.T) {
 
 func TestDaemonFixesRUWordTypedInRULayout(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	nir := &fakeNiri{cur: 1}
 	d := newTestDaemon(t, rec, nir, 300)
-	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+	d.cur = layoutRU
 
 	// "руддщ" typed while RU is active (meant English).
 	d.typeKeys(keysRuddsh...)
@@ -148,7 +161,7 @@ func TestDaemonFixesRUWordTypedInRULayout(t *testing.T) {
 
 func TestDaemonNoFixForRealWords(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
 	// "hello" typed in EN — a real word, nothing to fix.
@@ -162,7 +175,7 @@ func TestDaemonNoFixForRealWords(t *testing.T) {
 
 func TestDaemonPreservesCase(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
 	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown})
@@ -182,7 +195,7 @@ func TestDaemonPreservesCase(t *testing.T) {
 
 func TestDaemonEnterClearsWithoutFix(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
 	d.typeKeys(keysGhbdtn...)
@@ -195,7 +208,7 @@ func TestDaemonEnterClearsWithoutFix(t *testing.T) {
 
 func TestDaemonCtrlComboClearsBuffer(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
 	d.typeKeys(keysGhbdtn[:3]...)
@@ -216,9 +229,9 @@ func TestDaemonCtrlComboClearsBuffer(t *testing.T) {
 
 func TestDaemonBackspaceShrinksWord(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	nir := &fakeNiri{cur: 1}
 	d := newTestDaemon(t, rec, nir, 300)
-	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+	d.cur = layoutRU
 
 	// "руддщ", then BackSpace, then space: buffer becomes "рудд" → "hell"
 	// is a known EN word → fix fires with 4 backspaces.
@@ -244,7 +257,7 @@ func TestDaemonBackspaceShrinksWord(t *testing.T) {
 
 func TestDaemonPauseBoundary(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 30)
 
 	d.typeKeys(keysGhbdtn...)
@@ -259,7 +272,7 @@ func TestDaemonPauseBoundary(t *testing.T) {
 
 func TestDaemonPausedSkipsFix(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 	d.TogglePause()
 
@@ -273,7 +286,7 @@ func TestDaemonPausedSkipsFix(t *testing.T) {
 
 func TestDaemonExcludedApp(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 	d.Cfg.Daemon.ExcludeAppIDs = []string{"qemu", "MyGame"}
 	d.appID = "mygame" // case-insensitive match
@@ -288,7 +301,7 @@ func TestDaemonExcludedApp(t *testing.T) {
 
 func TestDaemonStreamEventsUpdateLayout(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
 	d.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":1}}}`)
@@ -309,7 +322,7 @@ func TestDaemonStreamEventsUpdateLayout(t *testing.T) {
 
 func TestDaemonDryRunInjectsNothing(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 	d.DryRun = true
 
@@ -323,23 +336,9 @@ func TestDaemonDryRunInjectsNothing(t *testing.T) {
 	}
 }
 
-func mustLayouts(t *testing.T, json_ string) *niri.KeyboardLayouts {
-	t.Helper()
-	ls, err := func() (*niri.KeyboardLayouts, error) {
-		c := &niri.Client{Run: func(name string, args ...string) ([]byte, error) {
-			return []byte(json_), nil
-		}}
-		return c.KeyboardLayouts()
-	}()
-	if err != nil {
-		t.Fatalf("parse layouts %q: %v", json_, err)
-	}
-	return ls
-}
-
 func TestDaemonMinWordLenSkipsFragments(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
 	// "kf" maps to "ла" (a known RU word), but 2 runes < min_word_len=3:
@@ -357,7 +356,7 @@ func TestDaemonMinWordLenSkipsFragments(t *testing.T) {
 
 func TestDaemonAnyPrintableSeparatorCompletesWord(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 0)
 
 	// "ghbdtn" closed by ")" (Shift+0): a printable separator completes
@@ -375,7 +374,7 @@ func TestDaemonAnyPrintableSeparatorCompletesWord(t *testing.T) {
 
 func TestDaemonPauseBoundaryDisabledByDefault(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 0)
 
 	// A word typed and abandoned (no separator): nothing must happen,
@@ -397,9 +396,9 @@ func TestDaemonPauseBoundaryDisabledByDefault(t *testing.T) {
 
 func TestDaemonHeldBackspaceInvalidatesBuffer(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 0)
-	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+	d.cur = layoutRU
 
 	// "руддщ", then a HELD backspace: one press plus kernel repeats the
 	// app also acts on. The daemon cannot know how much was deleted.
@@ -435,9 +434,9 @@ func TestDaemonHeldBackspaceInvalidatesBuffer(t *testing.T) {
 
 func TestDaemonHeldLetterInvalidatesBuffer(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 0)
-	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+	d.cur = layoutRU
 
 	// "рудд" + HELD key (app gets "руддооо", daemon can only see "руддо").
 	d.typeKeys(keysRuddsh[:4]...)
@@ -458,9 +457,9 @@ func TestDaemonHeldLetterInvalidatesBuffer(t *testing.T) {
 
 func TestDaemonSeparatorFlipsLikeTheWord(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":1}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 0)
-	d.setLayouts(mustLayouts(t, `{"names":["English (US)","Russian"],"current_idx":1}`))
+	d.cur = layoutRU
 
 	// User on RU layout presses Shift+/ (produces ','), meaning the EN
 	// question mark: "руддщ," must become "hello?" — the separator flips
@@ -488,7 +487,7 @@ func TestDaemonSeparatorFlipsLikeTheWord(t *testing.T) {
 
 func TestDaemonDoesNotSwitchLayoutByDefault(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 	d.Cfg.Daemon.SwitchLayout = false // project default: daemon leaves the layout alone
 
@@ -500,5 +499,53 @@ func TestDaemonDoesNotSwitchLayoutByDefault(t *testing.T) {
 	}
 	if nir.hasCall("switch-layout") {
 		t.Errorf("daemon must not switch the layout by default, niri calls: %v", nir.calls)
+	}
+}
+
+func TestRememberRestoresAppLayoutOnFocus(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 1} // RU active globally
+	f := newTestDaemon(t, rec, nir, 300)
+	f.appID = "zcode"
+
+	// The user deliberately toggles to RU in zcode: a layout switch is
+	// the app's intended language.
+	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":1}}`)
+	if nir.cur != 1 || f.appLayouts["zcode"] != layoutRU {
+		t.Fatalf("learning failed: cur=%d memory=%v", nir.cur, f.appLayouts)
+	}
+
+	// Focus waterfox (never typed in): no memory → no switch.
+	nir.appID = "waterfox"
+	f.handleStreamEvent(`{"WindowFocusChanged":{"id":4}}`)
+	for _, c := range nir.calls {
+		if strings.Contains(c, "switch-layout") {
+			t.Errorf("no memory for waterfox — must not switch, calls: %v", nir.calls)
+		}
+	}
+
+	// The user switches to EN there (deliberate): learn waterfox=EN.
+	nir.cur = 0
+	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":0}}`)
+
+	// Back to zcode: current is EN, remembered RU → restore fires.
+	nir.appID = "zcode"
+	f.handleStreamEvent(`{"WindowFocusChanged":{"id":27}}`)
+	t.Logf("state: memory=%v cur=%v appID=%s", f.appLayouts, f.cur, f.appID)
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("expected restore to RU for zcode, niri calls: %v", nir.calls)
+	}
+}
+
+func TestRememberDisabledByConfig(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 1}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.appID = "zcode"
+	f.Cfg.Daemon.RememberWindowLayout = false
+
+	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":1}}`)
+	if len(f.appLayouts) != 0 {
+		t.Errorf("learning must be off with remember_window_layout=false")
 	}
 }

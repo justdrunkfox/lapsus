@@ -214,6 +214,7 @@ func (d *Daemon) handleStreamEvent(line string) {
 		if ls, err := d.Niri.KeyboardLayouts(); err == nil {
 			d.setLayouts(ls)
 		}
+		d.learnAppLayout()
 	case ev.WindowFocusChanged != nil:
 		// track-layout "window": the focused window brings its own
 		// layout, and app exclusions follow the focus too.
@@ -334,7 +335,6 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		d.clearBuf() // F-keys, numpad, media keys, anything untranslatable
 		return
 	}
-	d.learnAppLayout()
 	switch {
 	case isWordChar(ch):
 		d.buf = append(d.buf, ch)
@@ -452,9 +452,12 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 	}
 }
 
-// learnAppLayout remembers which language the user types in per
-// application (app_id), so the layout can be restored on focus. Caller
-// must hold d.mu.
+// learnAppLayout remembers the focused application's language at the
+// moment its layout changes. Layout switches are deliberate (a manual
+// toggle, or lapsus switching after a fix), so this is the app's
+// intended language. Learning from raw keystrokes instead records the
+// wrong-layout state during wrong-layout episodes and inverts the
+// memory. Caller must hold d.mu.
 func (d *Daemon) learnAppLayout() {
 	if !d.Cfg.Daemon.RememberWindowLayout || d.appID == "" {
 		return
@@ -463,7 +466,7 @@ func (d *Daemon) learnAppLayout() {
 }
 
 // restoreAppLayout switches the focused window to the language last
-// typed in this application, when it differs from the current one.
+// used in this application, when it differs from the current one.
 func (d *Daemon) restoreAppLayout() {
 	if !d.Cfg.Daemon.RememberWindowLayout {
 		return
@@ -476,6 +479,7 @@ func (d *Daemon) restoreAppLayout() {
 	if !ok || remembered == cur || app == "" {
 		return
 	}
+	d.logf("focus %q: remembered=%v cur=%v", app, remembered, cur)
 	if niri.AppIDIn(app, d.Cfg.Daemon.ExcludeAppIDs) {
 		return
 	}
