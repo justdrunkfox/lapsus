@@ -156,3 +156,13 @@ func TestValidatePauseMs(t *testing.T) {
 		t.Errorf("expected no error, got: %v", err)
 	}
 }
+
+func TestDefaultsFeedback(t *testing.T) {
+	c := Defaults()
+	if !c.Feedback.Notify {
+		t.Error("default feedback.notify should be true")
+	}
+	if c.Feedback.Sound != "bell" {
+		t.Errorf("default feedback.sound = %q, want bell", c.Feedback.Sound)
+	}
+}

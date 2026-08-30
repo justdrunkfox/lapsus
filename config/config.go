@@ -97,6 +97,8 @@ func Defaults() *Config {
 	c.Daemon.BoundaryPauseMs = 0
 	c.Daemon.MinWordLen = 3
 	c.Daemon.SwitchLayout = false
+	c.Feedback.Notify = true
+	c.Feedback.Sound = "bell"
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
 	return c
 }

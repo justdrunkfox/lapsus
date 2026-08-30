@@ -156,6 +156,7 @@ func (f *Fixer) toggleWord(word string, opts Options, after func()) error {
 		return err
 	}
 	f.Way.ClearPrimary()
+	f.FB.Fire(word, corrected)
 	return f.switchLayoutAfter(corrected, opts)
 }
 
