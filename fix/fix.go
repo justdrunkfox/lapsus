@@ -162,7 +162,7 @@ func (f *Fixer) toggleWord(word string, opts Options, after func()) error {
 // are converted word by word. The selection is left completely alone
 // when there is nothing to fix or the selection is not convertible text.
 func (f *Fixer) fixPreSelected(sel string, opts Options) error {
-	if word, ok := sanitizeSelection(sel); ok && !strings.ContainsAny(word, " \t") {
+	if word, ok := sanitizeSelection(sel); ok {
 		f.logf(opts, "using existing selection %q", word)
 		// after=nil: on a no-op the user's selection is left untouched.
 		return f.toggleWord(word, opts, nil)
@@ -251,13 +251,17 @@ func (f *Fixer) fixGUICut(opts Options) error {
 // plus typing — this assumes the caret sits right after the word, which
 // is the normal case of fixing the word you have just typed.
 func (f *Fixer) fixTerminal(opts Options) error {
-	word, ok := sanitizeSelection(f.Way.ReadPrimary())
+	// A mouse selection is always explicit, so phrases are fine here;
+	// multi-line grabs are still refused.
+	word, ok := sanitizePhrase(f.Way.ReadPrimary())
 	if !ok {
 		return errors.New("terminal mode: select the text with the mouse first")
 	}
 	f.logf(opts, "captured %q", word)
 
-	corrected, changed := convertWord(word)
+	// Flip word by word: a mixed-script selection flips each word toward
+	// its own intended layout.
+	corrected, changed := f.convertPhrase(word)
 	if !changed {
 		f.logf(opts, "nothing to flip in %q", word)
 		return nil
@@ -318,21 +322,25 @@ func sanitizePhrase(sel string) (phrase string, ok bool) {
 }
 
 // sanitizeSelection extracts a single-word candidate from a selection:
-// trailing whitespace stripped, within sane length, no control characters,
-// and no internal line breaks. ok=false means the selection is empty,
-// multi-line, oversized, or binary.
+// edge whitespace stripped, within sane length, no control characters,
+// no internal line breaks — and no internal whitespace at all. The
+// classic hotkey path uses it on the synthetic Ctrl+Shift+Left
+// selection, which in GUI apps EXTENDS an already-active mouse selection
+// word by word; flipping a multi-word grab would convert text the user
+// never meant to touch. ok=false routes those to a refusal.
 func sanitizeSelection(sel string) (word string, ok bool) {
 	if sel == "" {
 		return "", false
 	}
-	// A trailing newline (or spaces) after the word is normal; an internal
-	// one means a multi-line selection — replacing it with one word would
-	// destroy text, so refuse.
-	trimmed := strings.TrimRight(sel, " \t\n\r")
-	if strings.ContainsRune(trimmed, '\n') {
+	// Trailing whitespace/newline is normal (most selections end with
+	// one); leading spaces are noise. Everything that remains inside —
+	// any space, tab or line break — means the selection grabbed more
+	// than a word: refuse.
+	word = strings.TrimRight(sel, " \t\n\r")
+	word = strings.TrimLeft(word, " \t")
+	if word == "" || strings.ContainsAny(word, " \t\n\r") {
 		return "", false
 	}
-	word = strings.TrimSpace(trimmed)
 	if word == "" || len(word) > maxWordLen {
 		return "", false
 	}

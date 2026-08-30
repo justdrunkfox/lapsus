@@ -375,3 +375,39 @@ func TestFixGUIPreSelectedMultiLineRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestFixGUIRefusesExtendedSelection(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"", "ghghgh dddddd"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	// With an active mouse selection, Ctrl+Shift+Left in GUI apps EXTENDS
+	// it one word left — the classic path must refuse to flip a grabbed
+	// pair and collapse the selection instead.
+	if err := f.Run(Options{}); err == nil {
+		t.Fatal("extended (multi-word) selection must be refused in classic mode")
+	}
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype -- ") {
+			t.Errorf("multi-word grab must not be flipped, got %q", c)
+		}
+	}
+	if !rec.hasCall("-k Right") {
+		t.Errorf("bogus selection should be collapsed, calls: %v", rec.calls)
+	}
+}
+
+func TestFixTerminalFlipsSelectedPhrase(t *testing.T) {
+	rec := &recorder{primaryResponses: []string{"руддщ ghbdtn"}}
+	nir := &fakeNiri{appID: "foot", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}}
+	f := newTestFixer(t, rec, nir)
+
+	// In a terminal the mouse selection is always explicit, so a
+	// multi-word selection may be flipped in place.
+	if err := f.Run(Options{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rec.hasCall("wtype -- hello привет") {
+		t.Errorf("expected the phrase to flip, calls: %v", rec.calls)
+	}
+}
