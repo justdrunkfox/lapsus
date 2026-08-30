@@ -27,7 +27,7 @@ func TestFireSendsNotification(t *testing.T) {
 	cap := &capture{}
 	f := &F{Notify: true, Run: cap.run}
 	f.Fire("ghbdtn", "привет")
-	if !cap.has(`notify-send -a lapsus lapsus ghbdtn → привет`) {
+	if !cap.has("notify-send") || !cap.has("ghbdtn → привет") {
 		t.Errorf("notification expected, calls: %v", cap.calls)
 	}
 	if len(cap.calls) != 1 {

@@ -26,10 +26,6 @@ type F struct {
 	// Sound is a path to an audio file or "bell" for the freedesktop
 	// bell; "" disables sound.
 	Sound string
-	// Reap reaps finished sound/notify processes. Set it for long-lived
-	// processes (the daemon); a one-shot fix may skip it — children are
-	// re-parented when the process exits.
-	Reap bool
 	// Run overrides command execution (for tests).
 	Run Runner
 }
@@ -51,25 +47,20 @@ func (f *F) Fire(from, to string) {
 	}
 }
 
-// spawn runs one feedback command: synchronously with the injected
-// runner (tests), or detached in a goroutine otherwise.
+// spawn runs one feedback command detached: sh backgrounds the command
+// and exits immediately. This is race-free for the one-shot fix (a bare
+// goroutine could lose the race against process exit and never start
+// the child) and zombie-free for the daemon (the re-parented player is
+// sh's child, not ours).
 func (f *F) spawn(name string, args []string) {
 	if f.Run != nil {
 		f.Run(name, args)
 		return
 	}
+	argv := append([]string{"-c", `"$@" >/dev/null 2>&1 &`, "_", name}, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	if err := cmd.Start(); err != nil {
-		return
-	}
-	if f.Reap {
-		go func() { cmd.Wait() }()
-	}
-	// Without Reap the process is intentionally left to outlive this
-	// short-lived parent (e.g. a sound still playing after `lapsus fix`
-	// exits); the system re-parents it.
+	_ = exec.CommandContext(ctx, "sh", argv...).Run()
 }
 
 // soundPath resolves the sound setting to a file path, "" for off.

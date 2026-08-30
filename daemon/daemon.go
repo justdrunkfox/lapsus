@@ -72,7 +72,6 @@ func New(cfg *config.Config, ana *analyze.Analyzer, nir *niri.Client, way *wayla
 		FB: &feedback.F{
 			Notify: cfg.Feedback.Notify,
 			Sound:  cfg.Feedback.Sound,
-			Reap:   true,
 		},
 		Verbose: verbose,
 		DryRun:  dryRun,
