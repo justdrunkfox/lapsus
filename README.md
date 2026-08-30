@@ -1,171 +1,41 @@
 # lapsus
 
-Фиксер раскладки RU↔EN для [niri](https://github.com/niri-wm/niri) (Wayland, Linux):
-исправляет текст, набранный не в той раскладке — в духе Punto Switcher, но
-свой. Название — от лат. *lapsus linguae*, «оговорка».
+[English](README.md) | [Русский](README.ru.md)
 
-Преемник двух предыдущих попыток, объединяет их наработки:
+A wrong-keyboard-layout fixer for Linux/Wayland, built for [niri](https://github.com/niri-wm/niri) — in the spirit of Punto Switcher. Typed `ghbdtn` instead of `привет`? lapsus flips it back: automatically at word boundaries, or on a hotkey. The name comes from Latin *lapsus linguae*, "a slip of the tongue".
 
-- **wksw** (`../wksw`, Rust, март 2026) — рабочий end-to-end прототип:
-  конвертация последнего слова по хоткею через `wtype` + `wl-clipboard`.
-  Отсюда взят целевой пайплайн и позиционная таблица символов.
-- **oshitkeyb** (`../oshitkeyb`, Go, май–июнь 2026) — словари, анализатор,
-  конфиг. Отсюда перенесена вся логика (включая 2 коммита из worktree
-  `impl-continue`, которые не попали в master).
+## Features
 
-## Статус
+- **Auto-fix daemon** — reads keystrokes straight from `/dev/input` (no grab, no root), keeps the word being typed in a buffer and fixes it when the word ends — but only when the dictionaries are confident: the flipped reading must be a real word, the original must not.
+- **Hotkey toggle** — one key press flips the word at the caret to the other layout, unconditionally (an explicit key press needs no dictionary), and the layout follows the word. A second hotkey does the same for the current selection, phrase by phrase.
+- **Per-application layout memory** — remembers which language you type in each application and restores it when a window regains focus. New windows of a familiar app start in "their" language.
+- **Tray icon** — the flag of the active layout, dimmed while paused; menu with toggles (auto-fix / sound / notifications), persisted to the config.
+- **Feedback** — desktop notification and a sound on every flip (optional).
+- **systemd user service** included (`deploy/lapsus.service`).
 
-| Компонент | Что делает | Статус |
-|---|---|---|
-| `layout` | конвертация QWERTY↔ЙЦУКЕН по физическим позициям клавиш | ✅ |
-| `dict` | частотные словари: embedded top-20k (OpenSubtitles) + пользовательские | ✅ |
-| `analyze` | детект «слово набрано не в той раскладке» по словарям | ✅ |
-| `config` | TOML-конфиг с дефолтами и валидацией | ✅ |
-| `lapsus check` / `convert` | самопроверка; конвертация текста с авто-направлением | ✅ |
-| `lapsus fix` | one-shot фикс последнего слова по хоткею niri | ✅ M1 (проверен вживую) |
-| `lapsus daemon` | авто-режим (evdev-триггер на границе слова) | ✅ M2 ядро (проверка в быту — за тобой) |
+## Requirements
 
-План работ — в [TODO.md](TODO.md).
+- Linux, Wayland; compositor integration is currently [niri](https://github.com/niri-wm/niri)-specific (layout switching and window focus over `niri msg`)
+- Go ≥ 1.26 (build only; CGO is not used)
+- [wtype](https://github.com/atx/wtype) and [wl-clipboard](https://github.com/bugaevc/wl-clipboard)
+- `libnotify-bin` for desktop notifications (optional)
+- membership in the `input` group for the daemon (reads `/dev/input` without grab, without root)
 
-## `lapsus fix`: хоткей в niri (M1)
-
-Бинд в `~/.config/niri/config.kdl`:
-
-```kdl
-// Fn на ThinkPad приходит как XF86WakeUp (key 151); правый Alt превращён
-// в Compose-клавишу (compose:ralt), потому что клавишу-модификатор соло
-// в niri забиндить нельзя
-input {
-    keyboard {
-        xkb {
-            options "grp:caps_toggle,grp_led:caps,compose:ralt"
-        }
-    }
-}
-binds {
-    XF86WakeUp      { spawn "lapsus" "fix"; }              // слово у каретки
-    Ctrl+XF86WakeUp { spawn "lapsus" "fix" "--selection"; } // выделенное
-    Multi_key       { spawn "lapsus" "fix"; }              // правый Alt — то же
-    Ctrl+Multi_key  { spawn "lapsus" "fix" "--selection"; }
-}
-```
-
-Что происходит при нажатии:
-
-```
-niri IPC: focused-window (app_id)  ──►  это терминал? (hotkey.terminals)
-   │                                            │
-   ▼ нет (GUI)                                  ▼ да (терминал)
-wtype Ctrl+Shift+Left                     текст уже выделен мышью:
-   │  (выделить слово)                    wl-paste --primary
-   ▼                                            │
-wl-paste --primary  ◄───────────────────────────┘
-   │
-позиционный переворот  ──►  есть что менять?
-   │ да
-   ▼
-GUI: wtype -- <слово>      терминал: BackSpace ×N + wtype -- <слово>
-   │                                     │ (каретка сразу после слова)
-   └──────────────┬──────────────────────┘
-                  ▼
-   niri msg action switch-layout <индекс>   ← ПОСЛЕДНИМ (см. грабли)
-```
-
-Детали:
-
-- **Хоткей — тумблер, без словарей.** `lapsus fix` переворачивает слово
-  у каретки в другую раскладку всегда — даже если слова нет в словаре
-  (нажатие Alt — явное намерение); раскладка следует за словом.
-  `lapsus fix --selection` — то же с выделенным (фраза — пословно,
-  пробелы сохраняются: «ghbdtn vbh» → «привет мир»; мультистрока и
-  гигантское выделение не трогаются). Умный консервативный фикс «только
-  если словарь уверен» — это работа демона, хоткей не угадывает.
-  Почему выделение — отдельный хоткей: primary selection переживает своё
-  окно — прочитал её в другом окне и вставил мусор; явный хоткей
-  надёжнее угадывания.
-- **Раскладка после фикса.** Хоткеи переводят раскладку вслед за словом
-  (нажал Alt — слово перевернулось и раскладка с ним). Демон раскладку
-  не трогает (`daemon.switch_layout = false`): он не знает, хочешь ли ты
-  продолжать в текущей. Техника: niri IPC (`keyboard-layouts`) отдаёт список
-  раскладок и текущий индекс — lapsus переключает на раскладку исправленного
-  слова по индексу. `niri msg action switch-layout` принимает только
-  `next` / `prev` / `<индекс>` (не имя); на старых niri без этого IPC свитч
-  просто пропускается. Порядок «сначала инъекция, потом свитч» зафиксирован
-  юнит-тестом (niri#3568).
-- **Терминалы** не обновляют primary selection по Ctrl+Shift+Left, поэтому
-  там текст нужно выделить мышью заранее. Замена идёт стиранием
-  (BackSpace × длина слова) и вводом исправления — буфер обмена не
-  трогается; это работает, когда каретка стоит сразу после слова, то
-  есть для только что набранного слова — основной кейс. Список
-  терминалов — по `app_id` окна (Alacritty входит в дефолты, проверено
-  вживую).
-- **Отказоустойчивость:** двойное нажатие хоткея не запускает второй
-  пайплайн (flock); чтение primary ретраится; мультистрочное/длинное
-  выделение не заменяется (отказ без порчи текста); если фикс не нужен —
-  выделение схлопывается, каретка на месте.
-- Отладка: `lapsus fix -v` (пошаговый лог) и `lapsus fix -n` (dry-run —
-  покажет, что зафиксировал бы, ничего не меняя).
-
-Проверено вживую на niri 26.04: waterfox (GUI-путь: `ghbdtn` → `привет`)
-и Alacritty (терминальный путь). Остальные пункты ручного чек-листа — в
-[TODO.md](TODO.md).
-
-## `lapsus daemon`: авто-режим (M2)
-
-Демон читает клавиатуру напрямую через `/dev/input/eventX` **без grab**,
-сам набирает текущее слово из потока клавиш и на границе слова чинит его,
-если словари уверены, что раскладка не та:
-
-```
-клавиатура (evdev, группа input) ──► буфер слова ──► граница:
-                                        ▲             пробел / , . ; / ? ! :
-                                        │             пауза ~300 мс
-niri event-stream: активная раскладка ──┘             │
-и фокус (track-layout «window»)                analyze (словари)
-                                                       │ уверен?
-                                                       ▼
-                                    BackSpace ×N + ввод исправления
-                                                       ▼
-                                    niri msg action switch-layout (последним)
-```
-
-- Замена одинакова везде — в GUI и в терминалах: демону не нужны выделение
-  и буфер обмена, каретка гарантированно стоит сразу после набранного слова.- Слово завершается **любым печатным разделителем** — пробел, пунктуация,
-  кавычки, скобки, дефис: «слово)» чинится так же, как «слово ». Enter,
-  Tab, стрелки и Ctrl/Alt-комбо сбрасывают буфер без фикса (текст мог уже
-  «уехать» — выполненная команда, автодополнение, съехавшая каретка).
-- Паузная граница (починить слово, после которого просто думают) по
-  умолчанию **выключена** (`daemon.boundary_pause_ms = 0`): пауза в
-  середине слова разрезала бы его на обрывки. Включать осознанно,
-  значение в [50, 5000] мс.
-- Устройства опрашиваются раз в 3 с (hotplug), раскладка и фокус трекаются
-  по `niri msg --json event-stream`.
-
-Иконка в трее (рисуется кодом, без ассетов): флаг активной раскладки
-(EN — звездно-полосатый, RU — триколор), приглушён пока авто-фикс на
-паузе. Открывается и левым, и правым кликом (SNI ItemIsMenu). Меню:
-«Автопереключение по словарям», «Звук», «Нотификации» —
-тумблеры применяются к демону мгновенно и сохраняются в конфиг
-(хоткейные `lapsus fix` подхватят их при следующем запуске). Трею нужен
-D-Bus (StatusNotifierItem, pure-Go реализация через
-github.com/energye/systray + godbus — единственные внешние зависимости
-проекта, CGO по-прежнему ноль).
-
-Запуск (нужно членство в группе `input`):
+## Build & install
 
 ```sh
-~/.local/bin/lapsus daemon -n -v   # dry-run: только лог, ничего не меняет
-~/.local/bin/lapsus daemon         # боевой режим
+go build -o ~/.local/bin/lapsus ./cmd/lapsus
+lapsus check                     # self-test: config, dictionaries, analyzer
+lapsus convert "Ghbdtn? vbh!"    # → Привет, мир!
 ```
 
-Пауза (например, на время игры в VM): `pkill -USR1 lapsus` — тумблер,
-повторный сигнал возвращает авто-фикс. Можно забиндить в niri:
+Cross-compiles cleanly (no CGO):
 
-```kdl
-Mod+Shift+P { spawn "pkill" "-USR1" "lapsus"; }
+```sh
+GOOS=linux GOARCH=arm64 go build -o dist/lapsus-linux-arm64 ./cmd/lapsus
 ```
 
-Постоянный запуск — systemd user unit ([deploy/lapsus.service](deploy/lapsus.service)):
+Run the daemon permanently via the included systemd user unit:
 
 ```sh
 cp deploy/lapsus.service ~/.config/systemd/user/
@@ -174,92 +44,89 @@ systemctl --user enable --now lapsus
 journalctl --user -u lapsus -f
 ```
 
-Известные ограничения v1: зажатые клавиши (автоповтор) инвалидируют
-буфер слова — демону нельзя доверять длине, когда приложение получает
-повторы, которых он не видит; фикс для такого слова не сработает (порчи
-нет, слово просто не чинится). Правки одиночными Backspace/Delete и
-стрелками учитываются (Backspace ужимает слово, остальные случаи —
-консервативный сброс буфера). Быстрая печать прямо в момент инъекции
-может перемешаться с ней (без grab перехватить нечего); последнее слово
-без разделителя (перед Enter) не чинится — Enter сбрасывает буфер,
-чтобы не трогать уже выполненную команду. Перемещение каретки мышью
-демон не видит — набранное до клика слово не чинится (буфер доживёт до
-следующего разделителя и будет отброшен как мусор, фикс по нему не
-возможен).
+## Hotkeys
 
-Ключевые факты, на которых держится дизайн:
+Bind `lapsus fix` in `~/.config/niri/config.kdl`:
 
-- `wtype` печатает keysyms, а не сканкоды → вставляет кириллицу
-  независимо от активной раскладки (доказано wksw).
-- `niri msg action switch-layout` — нативное переключение раскладки по IPC.
-- libei/EIS для инъекции не подходит: niri не даёт EIS-сервер (поэтому из
-  старого плана oshitkeyb он выкинут; CGO в проекте запрещён — нужна чистая
-  кросс-компиляция).
-
-## Требования (linux-машина с niri)
-
-- go ≥ 1.26
-- [wtype](https://github.com/atx/wtype), [wl-clipboard](https://github.com/bugaevc/wl-clipboard)
-- niri (хоткей, `niri msg`)
-- для M2 (daemon): членство в группе `input` — чтение `/dev/input/eventX`
-  без grab и без root
-
-## Сборка
-
-На linux-машине:
-
-```sh
-go build -o ~/.local/bin/lapsus ./cmd/lapsus
-lapsus check        # самопроверка: конфиг, словари, анализатор
-lapsus convert "Ghbdtn? vbh!"   # → Привет, мир!
+```kdl
+binds {
+    // On this ThinkPad the bare Fn key arrives as XF86WakeUp.
+    // Right Alt is turned into a Compose key (compose:ralt), because a
+    // bare modifier key cannot be bound in niri.
+    XF86WakeUp      { spawn "lapsus" "fix"; }              // word at the caret
+    Ctrl+XF86WakeUp { spawn "lapsus" "fix" "--selection"; } // current selection
+}
 ```
 
-Кросс-компиляция из macOS (статический бинарь, без CGO):
+- **`lapsus fix`** — flips the word left of the caret, then switches the layout to the fixed word's language.
+- **`lapsus fix --selection`** — flips the current selection (mouse or Shift+arrows); a phrase is flipped word by word with whitespace preserved.
+- Debugging: `lapsus fix -v` (step log), `lapsus fix -n` (dry run).
 
-```sh
-GOOS=linux GOARCH=amd64 go build -o dist/lapsus-linux-amd64 ./cmd/lapsus
-GOOS=linux GOARCH=arm64 go build -o dist/lapsus-linux-arm64 ./cmd/lapsus
+## The daemon
+
+The daemon reads keystrokes directly from `/dev/input` (no grab, no root), keeps the word being typed in a buffer and fixes it at a word boundary:
+
+```
+keyboard (evdev, input group) ──► word buffer ──► boundary:
+                                       ▲          space / , . ; / ? ! :
+                                       │
+niri event-stream: active layout ──────┘          │
+and focused window                          analyze (dictionaries)
+                                                    │ confident?
+                                                    ▼
+                                 BackSpace ×N + type the fixed word
+                                                    ▼
+                                 niri msg action switch-layout (last)
 ```
 
-## Конфигурация
+- The word ends on **any printable separator** — space, punctuation, quotes, brackets: `word)` is fixed just like `word `. Enter, Tab, arrows and Ctrl/Alt combos drop the buffer without fixing (the text may already be gone — an executed command, a completion, a moved caret).
+- The replacement is the same everywhere — GUI apps and terminals: BackSpace × word length, then type the fix. No selections, no clipboard involved.
+- Devices are rescanned every 3 s (hotplug); the active layout and focused window are tracked via `niri msg --json event-stream`.
 
-`~/.config/lapsus/config.toml` (все ключи опциональны, дефолты валидны):
+### Tray
+
+The icon is rendered in code (no assets): the flag of the active layout, dimmed while auto-fixing is paused. The menu (both mouse buttons open it):
+
+- **Dictionary auto-fix** — pause/resume the daemon (same as SIGUSR1);
+- **Sound** and **Notifications** — feedback toggles;
+- **Quit** — stop the daemon.
+
+Toggles apply immediately and are saved to the config file.
+
+### Pausing
+
+```kdl
+Mod+Shift+P { spawn "pkill" "-USR1" "lapsus"; }   // toggle auto-fix
+```
+
+## Configuration
+
+`~/.config/lapsus/config.toml` (all keys optional, defaults are valid):
 
 ```toml
-[hotkey]
-source    = "niri"          # niri | evdev
-key       = "Ctrl+Alt+K"
-terminals = ["foot", "kitty", "Alacritty", "wezterm", "ghostty", "st"]
-# ↑ app_id терминалов (niri msg --json focused-window покажет ваш);
-#   для них действует отдельный терминальный путь фикса
-
-[capture]
-method = "clipboard"     # clipboard (primary selection) | cut (Ctrl+X-фолбэк
-                         # для приложений, не обновляющих primary)
-
 [fix]
-switch_layout = true     # переключать раскладку на язык исправленного слова
-pause_ms      = 50       # пауза после синтетических нажатий (wtype)
+switch_layout = true     # switch the layout to the fixed word's language
+pause_ms      = 50       # delay after synthetic keypresses (wtype)
 
 [feedback]
-notify = true          # системная нотификация при перевороте
-                       # (нужен пакет: sudo apt install libnotify-bin)
-sound  = "bell"        # звук: "bell" (freedesktop), путь к файлу
-                       # или "" чтобы выключить
+notify = true            # desktop notification on every flip
+                       # (needs: sudo apt install libnotify-bin)
+sound  = "bell"        # "bell" (freedesktop), a path to a file, or ""
 
 [daemon]
-tray                   = true  # иконка в трее: флаг раскладки + тумблеры
-remember_window_layout = true  # помнить язык каждого приложения и
-                               # возвращать его при фокусе окна
-exclude_app_ids        = []    # app_id, где авто-фикс выключен (VM, игры, RDP)
-switch_layout      = false # демон не трогает раскладку вовсе: он чинит
-                           # слово, а решать, где продолжать, — тебе.
-                           # Раскладку двигают хоткеи (fix.switch_layout)
-boundary_pause_ms  = 0    # паузная граница выключена: слово завершается
-                          # только печатным разделителем (0 = off,
-                          # включать в [50, 5000] на свой риск обрывков)
-min_word_len       = 3    # короче — демон не трогает (обрывки и одиночные
-                          # буквы; хоткей M1 чинит любые слова)
+tray                   = true  # tray icon: layout flag + toggles
+remember_window_layout = true  # restore the last typed language per app
+exclude_app_ids        = []    # app_ids where auto-fix is off (VMs, games)
+switch_layout      = false # the daemon never moves the layout; hotkeys do
+boundary_pause_ms  = 0    # idle boundary off: a word ends only on a
+                          # printable separator (opt-in, [50, 5000] ms)
+min_word_len       = 3    # shorter words are left alone by the daemon
+
+[hotkey]
+terminals = ["foot", "kitty", "Alacritty", "wezterm", "ghostty", "st"]
+
+[capture]
+method = "clipboard"     # clipboard (primary selection) | cut (Ctrl+X fallback)
 
 [autodetect]
 mode = "both"            # hotkey | continuous | both
@@ -268,33 +135,42 @@ mode = "both"            # hotkey | continuous | both
 user_dir = "~/.config/lapsus/dicts"   # en_freq.txt / ru_freq.txt
 ```
 
-Пользовательские словари: файлы `en_freq.txt` / `ru_freq.txt`, формат
-`слово частота` (по слову в строке), переопределяют встроенные частоты —
-туда можно добавлять свои термины, никнеймы, названия проектов.
+User dictionaries: `en_freq.txt` / `ru_freq.txt`, one `word frequency` pair per line; they override the built-in frequencies — add your own terms, nicknames, project names.
 
-## Словари
+## Dictionaries
 
-`dict/dict_data/{en,ru}_freq.txt` — top-20 000 слов, [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords)
-(corpus: OpenSubtitles 2018). Обновить:
+`dict/dict_data/{en,ru}_freq.txt` — top-20 000 words from [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) (OpenSubtitles 2018). Refresh:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt | head -n 20000 > dict/dict_data/en_freq.txt
 curl -fsSL https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ru/ru_50k.txt | head -n 20000 > dict/dict_data/ru_freq.txt
 ```
 
-## Конвертация по позициям
+## How the conversion works
 
-Таблица в `layout/layout.go` позиционно-верная: символ заменяется на символ
-с той же физической клавиши (с учётом Shift) другой раскладки. Следствия:
+The table in `layout/layout.go` is position-faithful: every character is replaced with the character of the same physical key (Shift included) in the other layout. Consequences:
 
-- `?` → `,` (Shift+/ на ЙЦУКЕН даёт запятую) и обратно `,` → `?`;
-- `@ # $ ^ &` → `" № ; : ?` (сдвиговый ряд цифр);
+- `?` → `,` (Shift+/ types `,` on ЙЦУКЕН) and back; `@ # $ ^ &` → `" № ; : ?`;
 - `` ` `` ↔ `ё`, `~` ↔ `Ё`, `<` ↔ `Б`, `>` ↔ `Ю`;
-- цифры и непомапленные символы проходят как есть.
+- digits and unmapped characters pass through unchanged.
 
-`analyze` пунктуацию по краям слова при фиксе **переворачивает вместе
-со словом** — знак был набран теми же физическими клавишами в той же
-неверной раскладке: `руддщ,` → `hello?` (Shift+/ в ЙЦУКЕН даёт «,», а
-пользователь имел в виду «?»), `ghbdtn,` → `приветб`. Совпадающие в
-обеих раскладках знаки (скобки, пробел, `!`) проходят без изменений.
-Демон делает то же с завершающим слово разделителем.
+Edge punctuation flips along with the word — it was pressed with the same wrong-layout keys: `руддщ,` → `hello?` (RU Shift+/ types `,`, but the user meant `?`). Characters identical in both layouts (brackets, space, `!`) pass unchanged.
+
+## Known limitations
+
+- Held-down keys (autorepeat) invalidate the daemon's word buffer — that word is skipped, nothing is corrupted.
+- The last word before Enter is never auto-fixed: Enter drops the buffer so an already-executed command is not touched.
+- Fast typing during the injection itself can interleave with it (nothing to intercept without a grab).
+- Moving the caret with the mouse is invisible to the daemon — a word typed before the click is not fixed.
+
+## Development
+
+```sh
+go vet ./... && go test ./...
+```
+
+The roadmap and development notes live in [TODO.md](TODO.md) (in Russian). The project is a successor of two prototypes: **wksw** (Rust, the end-to-end pipeline and the positional table) and **oshitkeyb** (Go, dictionaries, analyzer, config).
+
+## License
+
+[MIT](LICENSE)
