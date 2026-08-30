@@ -422,7 +422,7 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 		return
 	}
 	d.logf("fixed %q → %q", word, corrected)
-	if d.Cfg.Fix.SwitchLayout {
+	if d.Cfg.Daemon.SwitchLayout {
 		if _, err := d.Niri.SwitchToLayoutOf(corrected); err != nil {
 			d.logf("cannot switch layout: %v", err)
 		}

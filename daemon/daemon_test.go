@@ -60,6 +60,9 @@ func newTestDaemon(t *testing.T, rec *recorder, nir *fakeNiri, pauseMs int) *Dae
 	cfg := config.Defaults()
 	cfg.Fix.PauseMs = 0
 	cfg.Fix.SwitchLayout = true
+	// Tests assert layout switching explicitly; the daemon-side switch is
+	// off by default (the hotkey owns the layout move).
+	cfg.Daemon.SwitchLayout = true
 	cfg.Daemon.BoundaryPauseMs = pauseMs
 	dict_ := dict.New()
 	d := New(cfg, analyze.New(dict_), &niri.Client{Run: nir.run}, &wayland.Tools{Run: rec.run}, false, false)
@@ -480,5 +483,22 @@ func TestDaemonSeparatorFlipsLikeTheWord(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected 6 backspaces (word+separator), calls: %v", rec.calls)
+	}
+}
+
+func TestDaemonDoesNotSwitchLayoutByDefault(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{layoutJSON: `{"names":["English (US)","Russian"],"current_idx":0}`}
+	d := newTestDaemon(t, rec, nir, 300)
+	d.Cfg.Daemon.SwitchLayout = false // project default: daemon leaves the layout alone
+
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+
+	if !rec.hasCall("wtype -- привет ") {
+		t.Errorf("the word must still be fixed, calls: %v", rec.calls)
+	}
+	if nir.hasCall("switch-layout") {
+		t.Errorf("daemon must not switch the layout by default, niri calls: %v", nir.calls)
 	}
 }

@@ -43,6 +43,12 @@ type Config struct {
 		// ExcludeAppIDs lists niri app_id values where auto-fix is
 		// disabled (VMs, games, remote desktop...).
 		ExcludeAppIDs []string `toml:"exclude_app_ids"`
+		// SwitchLayout flips the layout to the corrected word's language
+		// after a daemon fix. Off by default: the daemon only fixes the
+		// word and cannot know whether the user wants to continue in the
+		// other layout — the explicit hotkey is the one that moves the
+		// layout (fix.switch_layout).
+		SwitchLayout bool `toml:"switch_layout"`
 		// BoundaryPauseMs is the idle time after which the buffered word
 		// counts as finished even without a separator. 0 (default)
 		// disables it: words complete only on real separators, so a
@@ -81,6 +87,7 @@ func Defaults() *Config {
 	c.Fix.PauseMs = 50
 	c.Daemon.BoundaryPauseMs = 0
 	c.Daemon.MinWordLen = 3
+	c.Daemon.SwitchLayout = false
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
 	return c
 }
