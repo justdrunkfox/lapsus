@@ -73,6 +73,9 @@ func newTestDaemon(t *testing.T, rec *recorder, nir *fakeNiri, pauseMs int) *Dae
 	cfg := config.Defaults()
 	cfg.Fix.PauseMs = 0
 	cfg.Fix.SwitchLayout = true
+	// Tests must never touch the desktop: no real notifications, no sound.
+	cfg.Feedback.Notify = false
+	cfg.Feedback.Sound = ""
 	// Tests assert layout switching explicitly; the daemon-side switch is
 	// off by default (the hotkey owns the layout move).
 	cfg.Daemon.SwitchLayout = true
