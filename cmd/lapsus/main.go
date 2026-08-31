@@ -21,6 +21,7 @@ import (
 	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
 	"github.com/voev/lapsus/tray"
+	"github.com/voev/lapsus/uinput"
 	"github.com/voev/lapsus/wayland"
 )
 
@@ -47,6 +48,8 @@ func main() {
 		runFixCommand(os.Args[2:])
 	case "daemon":
 		runDaemonCommand(os.Args[2:])
+	case "uinput-probe":
+		runUinputProbe()
 	case "version":
 		fmt.Println("lapsus", version)
 	case "help", "-h", "--help":
@@ -119,6 +122,36 @@ func runDaemonCommand(args []string) {
 		fmt.Fprintln(os.Stderr, "lapsus daemon:", err)
 		os.Exit(1)
 	}
+}
+
+// runUinputProbe is the uinput-injection experiment: creates a virtual
+// keyboard, types a test word into the focused window and reports
+// whether the compositor's layout group survived (niri#3568 check).
+func runUinputProbe() {
+	nir := &niri.Client{}
+	before, err := nir.KeyboardLayouts()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "probe: нет niri:", err)
+	}
+	kb, err := uinput.Open()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "probe:", err)
+		os.Exit(1)
+	}
+	defer kb.Close()
+	fmt.Println("устройство создано. Поставь курсор в любое поле ввода…")
+	time.Sleep(3 * time.Second)
+	fmt.Println("печатаю ghbdtn")
+	if err := kb.TypeSequence([]uint16{34, 35, 48, 32, 20, 49}, 15*time.Millisecond); err != nil {
+		fmt.Fprintln(os.Stderr, "probe:", err)
+		os.Exit(1)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if after, err := nir.KeyboardLayouts(); err == nil && before != nil {
+		fmt.Printf("раскладка до: idx=%d, после: idx=%d (совпадение = niri#3568 не проявился)\n",
+			before.CurrentIdx, after.CurrentIdx)
+	}
+	fmt.Println("готово — проверь, что ghbdtn появилось в поле ввода")
 }
 
 // daemonCtl adapts the daemon to the tray controller interface and owns

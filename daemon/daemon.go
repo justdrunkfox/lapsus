@@ -276,6 +276,11 @@ func (d *Daemon) superviseDevices(ctx context.Context) {
 	for ctx.Err() == nil {
 		if devs, err := evdev.Discover(); err == nil {
 			for _, dev := range devs {
+				if strings.Contains(strings.ToLower(dev.Name), "lapsus") {
+					// Our own uinput keyboard: reading it would feed
+					// our injections back into the word buffer.
+					continue
+				}
 				d.mu.Lock()
 				known := d.devices[dev.Path]
 				d.devices[dev.Path] = true
