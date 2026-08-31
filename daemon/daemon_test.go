@@ -656,7 +656,8 @@ func TestLayoutSwitchEventResetsFixRun(t *testing.T) {
 
 	f.typeKeys(keysGhbdtn...)
 	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
-	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":1}}`) // manual toggle
+	nir.cur = 1 // the manual toggle really changed the layout
+	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":1}}`) // daemon learns of it
 	f.typeKeys(keysVbh...)
 	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
 	for _, c := range nir.calls {
@@ -670,6 +671,8 @@ func TestLayoutPollSameLayoutKeepsBuffer(t *testing.T) {
 	rec := &recorder{}
 	nir := &fakeNiri{cur: 1}
 	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.RememberWindowLayout = false
+	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1})
 
 	// The safety-net poll re-reads the same layout: the half-typed word
 	// must survive it.
@@ -687,6 +690,8 @@ func TestLayoutPollChangedLayoutDropsBuffer(t *testing.T) {
 	rec := &recorder{}
 	nir := &fakeNiri{cur: 1}
 	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.RememberWindowLayout = false
+	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1})
 
 	f.typeKeys(keysMozhet[:2]...)
 	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":0}}}`)

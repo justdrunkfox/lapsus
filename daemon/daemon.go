@@ -169,19 +169,27 @@ func (d *Daemon) refreshNiriState() {
 func (d *Daemon) setLayouts(ls *niri.KeyboardLayouts) {
 	d.mu.Lock()
 	var cur layout.Layout
+	changed := false
 	if l, ok := ls.Current(); ok {
-		cur = l
-		d.cur = cur
-		d.warned = false
+		if l != d.cur {
+			cur = l
+			d.cur = cur
+			d.warned = false
+			changed = true
+		}
 	} else if !d.warned {
 		d.warned = true
 		d.logf("unrecognized layout names %v, assuming EN", ls.Names)
 	}
-	d.buf = nil
-	d.gen++
-	d.fixRunCount = 0
+	if changed {
+		// A real layout change: mixed-layout characters are garbage, and
+		// the fix-run counter belongs to the old layout.
+		d.buf = nil
+		d.gen++
+		d.fixRunCount = 0
+	}
 	d.mu.Unlock()
-	if d.OnLayoutChange != nil {
+	if changed && d.OnLayoutChange != nil {
 		d.OnLayoutChange(cur)
 	}
 }
