@@ -108,6 +108,7 @@ var (
 	keysPriv   = []uint16{42, 34, 35, 48, 32, 20, 49} // Shift+g + hbdtn → Ghbdtn
 	keysRto    = []uint16{19, 20, 24}                 // rto → кто in RU
 	keysVbh    = []uint16{47, 48, 35}                 // vbh → мир in RU
+	keysMozhet = []uint16{47, 36, 39, 20, 21}         // может (ж on ;)
 )
 
 func TestDaemonFixesENWordTypedInENLayout(t *testing.T) {
@@ -662,5 +663,34 @@ func TestLayoutSwitchEventResetsFixRun(t *testing.T) {
 		if strings.Contains(c, "switch-layout ") && !strings.Contains(c, "keyboard-layouts") {
 			t.Errorf("manual layout switch must reset the run, calls: %v", nir.calls)
 		}
+	}
+}
+
+func TestLayoutPollSameLayoutKeepsBuffer(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 1}
+	f := newTestDaemon(t, rec, nir, 300)
+
+	// The safety-net poll re-reads the same layout: the half-typed word
+	// must survive it.
+	f.typeKeys(keysMozhet[:2]...)
+	if len(f.buf) != 2 {
+		t.Fatalf("buffer = %q, want 2 chars", string(f.buf))
+	}
+	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":1}}}`)
+	if len(f.buf) != 2 {
+		t.Fatalf("same-layout poll must keep the buffer, got %q", string(f.buf))
+	}
+}
+
+func TestLayoutPollChangedLayoutDropsBuffer(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 1}
+	f := newTestDaemon(t, rec, nir, 300)
+
+	f.typeKeys(keysMozhet[:2]...)
+	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":0}}}`)
+	if len(f.buf) != 0 {
+		t.Errorf("changed layout must drop the buffer, got %q", string(f.buf))
 	}
 }

@@ -39,6 +39,9 @@ const (
 	deviceRescan = 3 * time.Second
 	// niriRetry is the reconnect delay for the event stream watcher.
 	niriRetry = 3 * time.Second
+	// layoutPoll is the periodic layout resync interval (a safety net
+	// for missed KeyboardLayoutSwitched events).
+	layoutPoll = 300 * time.Millisecond
 )
 
 // Daemon is the running auto-fix instance.
@@ -117,9 +120,29 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	go d.watchNiri(ctx)
 	go d.superviseDevices(ctx)
+	go d.pollLayouts(ctx)
 
 	<-ctx.Done()
 	return nil
+}
+
+// pollLayouts periodically re-reads the active layout. The event stream
+// normally keeps d.cur in sync, but a missed event (e.g. a toggle pressed
+// while the daemon is busy injecting) would silently corrupt every
+// keycode translation; the poll bounds that damage to ~layoutPoll.
+func (d *Daemon) pollLayouts(ctx context.Context) {
+	t := time.NewTicker(layoutPoll)
+	defer t.Stop()
+	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if ls, err := d.Niri.KeyboardLayouts(); err == nil {
+			d.setLayouts(ls)
+		}
+	}
 }
 
 func (d *Daemon) logf(format string, args ...any) {
@@ -226,7 +249,10 @@ func (d *Daemon) handleStreamEvent(line string) {
 		// layout, and app exclusions follow the focus too.
 		if win, err := d.Niri.FocusedWindow(); err == nil {
 			d.mu.Lock()
-			d.appID = win.AppIDOr("")
+			if win.AppIDOr("") != d.appID {
+				d.appID = win.AppIDOr("")
+				d.clearBuf() // the half-typed word belongs to the old window
+			}
 			d.mu.Unlock()
 		}
 		if ls, err := d.Niri.KeyboardLayouts(); err == nil {
@@ -341,6 +367,7 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		d.clearBuf() // F-keys, numpad, media keys, anything untranslatable
 		return
 	}
+	d.logf("key %d → %q (layout %v)", ev.Code, ch, d.cur)
 	switch {
 	case isWordChar(ch):
 		d.buf = append(d.buf, ch)
