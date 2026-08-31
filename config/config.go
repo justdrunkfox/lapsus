@@ -43,12 +43,15 @@ type Config struct {
 		// ExcludeAppIDs lists niri app_id values where auto-fix is
 		// disabled (VMs, games, remote desktop...).
 		ExcludeAppIDs []string `toml:"exclude_app_ids"`
-		// SwitchLayout flips the layout to the corrected word's language
-		// after a daemon fix. Off by default: the daemon only fixes the
-		// word and cannot know whether the user wants to continue in the
-		// other layout — the explicit hotkey is the one that moves the
-		// layout (fix.switch_layout).
+		// SwitchLayout lets the daemon move the layout to the fixed
+		// words' language after a run of fixes. The explicit hotkey
+		// also moves the layout (fix.switch_layout).
 		SwitchLayout bool `toml:"switch_layout"`
+		// SwitchAfterWords is how many consecutive fixes to the same
+		// language happen before the layout moves: 1 = every fix, 2+ =
+		// wait for a run of wrong-layout words so a single fixed word
+		// doesn't yank the layout around.
+		SwitchAfterWords int `toml:"switch_after_words"`
 		// BoundaryPauseMs is the idle time after which the buffered word
 		// counts as finished even without a separator. 0 (default)
 		// disables it: words complete only on real separators, so a
@@ -105,7 +108,8 @@ func Defaults() *Config {
 	c.Fix.PauseMs = 50
 	c.Daemon.BoundaryPauseMs = 0
 	c.Daemon.MinWordLen = 3
-	c.Daemon.SwitchLayout = false
+	c.Daemon.SwitchLayout = true
+	c.Daemon.SwitchAfterWords = 2
 	c.Daemon.Tray = true
 	c.Daemon.RememberWindowLayout = true
 	c.Daemon.DefaultLayout = ""
@@ -186,6 +190,10 @@ func (c *Config) Validate() error {
 	case "", "en", "ru":
 	default:
 		issues = append(issues, fmt.Sprintf("daemon.default_layout: must be \"\", \"en\" or \"ru\", got %q", c.Daemon.DefaultLayout))
+	}
+
+	if w := c.Daemon.SwitchAfterWords; w < 1 || w > 10 {
+		issues = append(issues, fmt.Sprintf("daemon.switch_after_words: must be in [1, 10], got %d", w))
 	}
 
 	if c.Daemon.MinWordLen < 1 || c.Daemon.MinWordLen > 10 {

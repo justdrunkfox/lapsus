@@ -79,6 +79,7 @@ func newTestDaemon(t *testing.T, rec *recorder, nir *fakeNiri, pauseMs int) *Dae
 	// Tests assert layout switching explicitly; the daemon-side switch is
 	// off by default (the hotkey owns the layout move).
 	cfg.Daemon.SwitchLayout = true
+	cfg.Daemon.SwitchAfterWords = 1
 	cfg.Daemon.BoundaryPauseMs = pauseMs
 	dict_ := dict.New()
 	d := New(cfg, analyze.New(dict_), &niri.Client{Run: nir.run}, &wayland.Tools{Run: rec.run}, false, false)
@@ -106,6 +107,7 @@ var (
 	keysHello  = []uint16{35, 18, 38, 38, 24}         // same keys, EN layout
 	keysPriv   = []uint16{42, 34, 35, 48, 32, 20, 49} // Shift+g + hbdtn → Ghbdtn
 	keysRto    = []uint16{19, 20, 24}                 // rto → кто in RU
+	keysVbh    = []uint16{47, 48, 35}                 // vbh → мир in RU
 )
 
 func TestDaemonFixesENWordTypedInENLayout(t *testing.T) {
@@ -597,6 +599,68 @@ func TestDefaultLayoutOff(t *testing.T) {
 	for _, c := range nir.calls {
 		if strings.Contains(c, "switch-layout") {
 			t.Errorf("default off — must not switch, calls: %v", nir.calls)
+		}
+	}
+}
+
+func TestSwitchLayoutAfterTwoConsecutiveFixes(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0} // EN active
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.SwitchAfterWords = 2
+
+	// First wrong-layout word: fixed, layout not moved yet.
+	f.typeKeys(keysGhbdtn...)
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	for _, c := range nir.calls {
+		if strings.Contains(c, "switch-layout") {
+			t.Errorf("single fixed word must not move the layout, calls: %v", nir.calls)
+		}
+	}
+
+	// Second consecutive fix to RU: the layout follows.
+	f.typeKeys(keysVbh...)
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("layout should follow after 2 consecutive fixes, niri calls: %v", nir.calls)
+	}
+}
+
+func TestRealWordResetsFixRun(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.SwitchAfterWords = 2
+
+	// One wrong-layout word, then a real word: the run resets, so the
+	// next wrong word is fixed without moving the layout.
+	f.typeKeys(keysGhbdtn...)
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.typeKeys(keysHello...)
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.typeKeys(keysGhbdtn...)
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	for _, c := range nir.calls {
+		if strings.Contains(c, "switch-layout") {
+			t.Errorf("real word must reset the run, calls: %v", nir.calls)
+		}
+	}
+}
+
+func TestLayoutSwitchEventResetsFixRun(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.SwitchAfterWords = 2
+
+	f.typeKeys(keysGhbdtn...)
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":1}}`) // manual toggle
+	f.typeKeys(keysVbh...)
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	for _, c := range nir.calls {
+		if strings.Contains(c, "switch-layout ") && !strings.Contains(c, "keyboard-layouts") {
+			t.Errorf("manual layout switch must reset the run, calls: %v", nir.calls)
 		}
 	}
 }

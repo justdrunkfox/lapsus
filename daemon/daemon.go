@@ -63,14 +63,18 @@ type Daemon struct {
 	mu         sync.Mutex
 	devices    map[string]bool
 	appLayouts map[string]layout.Layout // app_id → last typed layout
-	shift      bool
-	buf        []rune
-	gen        uint64
-	timer      *time.Timer
-	cur        layout.Layout
-	appID      string
-	paused     bool
-	warned     bool
+	// fix-run tracking: consecutive fixes to the same language move the
+	// layout once the run reaches switch_after_words.
+	fixRunLang  layout.Layout
+	fixRunCount int
+	shift       bool
+	buf         []rune
+	gen         uint64
+	timer       *time.Timer
+	cur         layout.Layout
+	appID       string
+	paused      bool
+	warned      bool
 }
 
 // New builds a Daemon; Run blocks until its context is cancelled.
@@ -152,6 +156,7 @@ func (d *Daemon) setLayouts(ls *niri.KeyboardLayouts) {
 	}
 	d.buf = nil
 	d.gen++
+	d.fixRunCount = 0
 	d.mu.Unlock()
 	if d.OnLayoutChange != nil {
 		d.OnLayoutChange(cur)
@@ -420,6 +425,7 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 	}
 	corrected, needsFix := d.Ana.Analyze(word, d.cur)
 	if !needsFix {
+		d.resetFixRun()
 		d.logf("no fix needed for %q", word)
 		return
 	}
@@ -447,8 +453,20 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 	d.logf("fixed %q → %q", word, corrected)
 	d.FB.Fire(word, corrected)
 	if d.Cfg.Daemon.SwitchLayout {
-		if _, err := d.Niri.SwitchToLayoutOf(corrected); err != nil {
-			d.logf("cannot switch layout: %v", err)
+		// Consecutive fixes to the same language mean a wrong-layout
+		// episode: once it reaches the threshold, move the layout so the
+		// remaining words type correctly. A single fixed word does not
+		// yank the layout; a real word or a layout change resets the run.
+		target := analyze.GuessLayout(corrected)
+		if d.fixRunLang != target {
+			d.fixRunLang, d.fixRunCount = target, 0
+		}
+		d.fixRunCount++
+		if d.fixRunCount >= d.Cfg.Daemon.SwitchAfterWords {
+			d.resetFixRun()
+			if _, err := d.Niri.SwitchToLayoutOf(corrected); err != nil {
+				d.logf("cannot switch layout: %v", err)
+			}
 		}
 	}
 }
@@ -464,6 +482,11 @@ func (d *Daemon) learnAppLayout() {
 		return
 	}
 	d.appLayouts[d.appID] = d.cur
+}
+
+// resetFixRun drops the consecutive-fix run. Caller must hold d.mu.
+func (d *Daemon) resetFixRun() {
+	d.fixRunCount = 0
 }
 
 // restoreAppLayout switches the focused window to the language last

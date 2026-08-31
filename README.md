@@ -6,7 +6,7 @@ A wrong-keyboard-layout fixer for Linux/Wayland, built for [niri](https://github
 
 ## Features
 
-- **Auto-fix daemon** — reads keystrokes straight from `/dev/input` (no grab, no root), keeps the word being typed in a buffer and fixes it when the word ends — but only when the dictionaries are confident: the flipped reading must be a real word, the original must not.
+- **Auto-fix daemon** — reads keystrokes straight from `/dev/input` (no grab, no root), keeps the word being typed in a buffer and fixes it when the word ends — but only when the dictionaries are confident: the flipped reading must be a real word, the original must not. After two consecutive fixes to the same language the daemon moves the layout there, so a wrong-layout phrase self-heals after a word or two.
 - **Hotkey toggle** — one key press flips the word at the caret to the other layout, unconditionally (an explicit key press needs no dictionary), and the layout follows the word. A second hotkey does the same for the current selection, phrase by phrase.
 - **Per-application layout memory** — remembers which language you type in each application and restores it when a window regains focus. New windows of a familiar app start in "their" language; windows of unknown apps can get a configured default language (`daemon.default_layout`).
 - **Tray icon** — the flag of the active layout, dimmed while paused; menu with toggles (auto-fix / sound / notifications), persisted to the config.
@@ -115,6 +115,9 @@ sound  = "bell"        # "bell" (freedesktop), a path to a file, or ""
 
 [daemon]
 tray                   = true  # tray icon: layout flag + toggles
+switch_layout          = true  # after 2 consecutive dictionary fixes to
+                               # the same language, move the layout there
+switch_after_words     = 2     # 1 = move on every fix; [1, 10]
 remember_window_layout = true  # restore the last typed language per app
 default_layout         = ""    # language for windows of unknown apps:
                                # "", "en" or "ru" ("" = don't touch)
