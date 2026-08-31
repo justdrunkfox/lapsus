@@ -552,3 +552,51 @@ func TestRememberDisabledByConfig(t *testing.T) {
 		t.Errorf("learning must be off with remember_window_layout=false")
 	}
 }
+
+func TestDefaultLayoutForUnknownApp(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0} // EN active
+	f := newTestDaemon(t, rec, nir, 300)
+	nir.appID = "new-app"
+	f.Cfg.Daemon.DefaultLayout = "ru"
+
+	// Unknown app + configured default: focus applies the default (RU).
+	f.handleStreamEvent(`{"WindowFocusChanged":{"id":9}}`)
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("default layout should apply for unknown app, niri calls: %v", nir.calls)
+	}
+}
+
+func TestRememberedBeatsDefault(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.DefaultLayout = "ru" // would say RU for unknown apps
+
+	// Learn zcode=EN by a deliberate switch there.
+	nir.appID = "zcode"
+	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":0}}`)
+
+	// Focus zcode: remembered EN wins over the "ru" default → no switch.
+	f.handleStreamEvent(`{"WindowFocusChanged":{"id":27}}`)
+	for _, c := range nir.calls {
+		if strings.Contains(c, "switch-layout") {
+			t.Errorf("remembered layout must beat the default, calls: %v", nir.calls)
+		}
+	}
+}
+
+func TestDefaultLayoutOff(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.appID = "new-app"
+	f.Cfg.Daemon.DefaultLayout = ""
+
+	f.handleStreamEvent(`{"WindowFocusChanged":{"id":9}}`)
+	for _, c := range nir.calls {
+		if strings.Contains(c, "switch-layout") {
+			t.Errorf("default off — must not switch, calls: %v", nir.calls)
+		}
+	}
+}

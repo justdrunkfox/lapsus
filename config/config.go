@@ -66,6 +66,9 @@ type Config struct {
 		// last typed in that application (learned passively from
 		// keystrokes, per app_id).
 		RememberWindowLayout bool `toml:"remember_window_layout"`
+		// DefaultLayout is the language for windows of applications the
+		// daemon has not learned yet: "" (off), "en" or "ru".
+		DefaultLayout string `toml:"default_layout"`
 	} `toml:"daemon"`
 
 	Feedback struct {
@@ -105,6 +108,7 @@ func Defaults() *Config {
 	c.Daemon.SwitchLayout = false
 	c.Daemon.Tray = true
 	c.Daemon.RememberWindowLayout = true
+	c.Daemon.DefaultLayout = ""
 	c.Feedback.Notify = true
 	c.Feedback.Sound = "bell"
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
@@ -176,6 +180,12 @@ func (c *Config) Validate() error {
 
 	if ms := c.Daemon.BoundaryPauseMs; ms != 0 && (ms < 50 || ms > 5000) {
 		issues = append(issues, fmt.Sprintf("daemon.boundary_pause_ms: must be 0 (disabled) or in [50, 5000], got %d", ms))
+	}
+
+	switch strings.ToLower(c.Daemon.DefaultLayout) {
+	case "", "en", "ru":
+	default:
+		issues = append(issues, fmt.Sprintf("daemon.default_layout: must be \"\", \"en\" or \"ru\", got %q", c.Daemon.DefaultLayout))
 	}
 
 	if c.Daemon.MinWordLen < 1 || c.Daemon.MinWordLen > 10 {

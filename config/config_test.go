@@ -204,3 +204,19 @@ func TestSaveCreatesMissingDir(t *testing.T) {
 		t.Fatalf("saved config unreadable: %v", err)
 	}
 }
+
+func TestValidateDefaultLayout(t *testing.T) {
+	c := Defaults()
+	c.Daemon.DefaultLayout = "de"
+	if err := c.Validate(); err == nil {
+		t.Error("expected validation error for default_layout=de")
+	}
+	c.Daemon.DefaultLayout = "ru"
+	if err := c.Validate(); err != nil {
+		t.Errorf("default_layout=ru should validate: %v", err)
+	}
+	c.Daemon.DefaultLayout = ""
+	if err := c.Validate(); err != nil {
+		t.Errorf("default_layout=\"\" should validate: %v", err)
+	}
+}

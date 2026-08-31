@@ -8,7 +8,7 @@ A wrong-keyboard-layout fixer for Linux/Wayland, built for [niri](https://github
 
 - **Auto-fix daemon** — reads keystrokes straight from `/dev/input` (no grab, no root), keeps the word being typed in a buffer and fixes it when the word ends — but only when the dictionaries are confident: the flipped reading must be a real word, the original must not.
 - **Hotkey toggle** — one key press flips the word at the caret to the other layout, unconditionally (an explicit key press needs no dictionary), and the layout follows the word. A second hotkey does the same for the current selection, phrase by phrase.
-- **Per-application layout memory** — remembers which language you type in each application and restores it when a window regains focus. New windows of a familiar app start in "their" language.
+- **Per-application layout memory** — remembers which language you type in each application and restores it when a window regains focus. New windows of a familiar app start in "their" language; windows of unknown apps can get a configured default language (`daemon.default_layout`).
 - **Tray icon** — the flag of the active layout, dimmed while paused; menu with toggles (auto-fix / sound / notifications), persisted to the config.
 - **Feedback** — desktop notification and a sound on every flip (optional).
 - **systemd user service** included (`deploy/lapsus.service`).
@@ -116,6 +116,8 @@ sound  = "bell"        # "bell" (freedesktop), a path to a file, or ""
 [daemon]
 tray                   = true  # tray icon: layout flag + toggles
 remember_window_layout = true  # restore the last typed language per app
+default_layout         = ""    # language for windows of unknown apps:
+                               # "", "en" or "ru" ("" = don't touch)
 exclude_app_ids        = []    # app_ids where auto-fix is off (VMs, games)
 switch_layout      = false # the daemon never moves the layout; hotkeys do
 boundary_pause_ms  = 0    # idle boundary off: a word ends only on a

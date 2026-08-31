@@ -28,6 +28,8 @@ type Controller interface {
 	SetFeedback(notify bool, sound string) error
 	RememberLayout() bool
 	SetRememberLayout(bool)
+	DefaultLayout() string
+	SetDefaultLayout(string) error
 	Quit()
 }
 
@@ -37,6 +39,9 @@ type Tray struct {
 
 	mAuto     *systray.MenuItem
 	mRemember *systray.MenuItem
+	mDefOff   *systray.MenuItem
+	mDefEn    *systray.MenuItem
+	mDefRu    *systray.MenuItem
 	mSound    *systray.MenuItem
 	mNotify   *systray.MenuItem
 
@@ -98,6 +103,14 @@ func (t *Tray) onReady() {
 		"Авто-фикс слов по словарям (демон)", !t.paused)
 	t.mRemember = systray.AddMenuItemCheckbox("Запоминать язык окон",
 		"При фокусе окна возвращать язык, на котором в нём печатали", t.ctrl.RememberLayout())
+	mDefault := systray.AddMenuItem("Язык новых окон",
+		"Язык приложений, которые демон ещё не выучил")
+	t.mDefOff = mDefault.AddSubMenuItemCheckbox("Выкл (не трогать)", "", t.ctrl.DefaultLayout() == "")
+	t.mDefEn = mDefault.AddSubMenuItemCheckbox("Английский", "", t.ctrl.DefaultLayout() == "en")
+	t.mDefRu = mDefault.AddSubMenuItemCheckbox("Русский", "", t.ctrl.DefaultLayout() == "ru")
+	t.mDefOff.Click(func() { t.setDefault("") })
+	t.mDefEn.Click(func() { t.setDefault("en") })
+	t.mDefRu.Click(func() { t.setDefault("ru") })
 	t.mSound = systray.AddMenuItemCheckbox("Звук",
 		"Звук при перевороте", t.sound != "")
 	t.mNotify = systray.AddMenuItemCheckbox("Нотификации",
@@ -166,6 +179,28 @@ func (t *Tray) syncMenu() {
 	} else {
 		t.mRemember.Uncheck()
 	}
+	def := t.ctrl.DefaultLayout()
+	t.checkItem(t.mDefOff, def == "")
+	t.checkItem(t.mDefEn, def == "en")
+	t.checkItem(t.mDefRu, def == "ru")
+}
+
+// checkItem toggles a menu checkbox conditionally.
+func (t *Tray) checkItem(m *systray.MenuItem, on bool) {
+	if on {
+		m.Check()
+	} else {
+		m.Uncheck()
+	}
+}
+
+// setDefault applies and syncs the new-app default language radio.
+func (t *Tray) setDefault(v string) {
+	if err := t.ctrl.SetDefaultLayout(v); err != nil {
+		feedbackError(err)
+		return
+	}
+	t.syncMenu()
 }
 
 // UpdateIcon redraws the flag; wire to daemon layout changes.

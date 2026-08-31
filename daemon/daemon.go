@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -473,26 +474,72 @@ func (d *Daemon) restoreAppLayout() {
 	}
 	d.mu.Lock()
 	app := d.appID
-	remembered, ok := d.appLayouts[app]
+	remembered, known := d.appLayouts[app]
 	cur := d.cur
 	d.mu.Unlock()
-	if !ok || remembered == cur || app == "" {
+	if app == "" {
 		return
 	}
 	d.logf("focus %q: remembered=%v cur=%v", app, remembered, cur)
 	if niri.AppIDIn(app, d.Cfg.Daemon.ExcludeAppIDs) {
 		return
 	}
+
+	target, known := remembered, known
+	usedDefault := false
+	if !known {
+		// Unknown application: the configured default language applies.
+		target, known = defaultLayoutTarget(d.Cfg.Daemon.DefaultLayout)
+		usedDefault = true
+	}
+	if !known || target == cur {
+		return
+	}
 	ls, err := d.Niri.KeyboardLayouts()
 	if err != nil {
 		return
 	}
-	if idx := niri.LayoutIndex(ls.Names, remembered); idx >= 0 && idx != ls.CurrentIdx {
-		d.logf("restoring %q layout for app %q", remembered, app)
+	if idx := niri.LayoutIndex(ls.Names, target); idx >= 0 && idx != ls.CurrentIdx {
+		if usedDefault {
+			d.logf("new app %q: applying default layout %q", app, target)
+		} else {
+			d.logf("restoring %q layout for app %q", target, app)
+		}
 		if err := d.Niri.SwitchLayout(idx); err != nil {
 			d.logf("layout restore failed: %v", err)
 		}
 	}
+}
+
+// defaultLayoutTarget parses the daemon.default_layout setting.
+func defaultLayoutTarget(s string) (layout.Layout, bool) {
+	switch strings.ToLower(s) {
+	case "en":
+		return layout.LayoutEN, true
+	case "ru":
+		return layout.LayoutRU, true
+	}
+	return layout.LayoutEN, false
+}
+
+// DefaultLayout returns the configured default language for unknown
+// applications: "", "en" or "ru".
+func (d *Daemon) DefaultLayout() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.Cfg.Daemon.DefaultLayout
+}
+
+// SetDefaultLayout changes the default language for unknown applications
+// ("" = off) and persists the setting to ConfigPath when set.
+func (d *Daemon) SetDefaultLayout(v string) error {
+	d.mu.Lock()
+	d.Cfg.Daemon.DefaultLayout = v
+	d.mu.Unlock()
+	if d.ConfigPath == "" {
+		return nil
+	}
+	return config.Save(d.ConfigPath, d.Cfg)
 }
 
 // RememberLayout reports whether per-application layout memory is on.
