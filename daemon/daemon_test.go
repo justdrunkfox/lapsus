@@ -656,7 +656,7 @@ func TestLayoutSwitchEventResetsFixRun(t *testing.T) {
 
 	f.typeKeys(keysGhbdtn...)
 	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
-	nir.cur = 1 // the manual toggle really changed the layout
+	nir.cur = 1                                                 // the manual toggle really changed the layout
 	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":1}}`) // daemon learns of it
 	f.typeKeys(keysVbh...)
 	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
