@@ -15,7 +15,6 @@ import (
 type Config struct {
 	Hotkey struct {
 		Source string `toml:"source"`
-		Key    string `toml:"key"`
 		// Terminals lists niri app_id values of terminal emulators.
 		// Terminals get a different fix path (mouse selection +
 		// clipboard paste) than GUI apps.
@@ -104,7 +103,6 @@ func Defaults() *Config {
 	}
 	c := &Config{}
 	c.Hotkey.Source = "niri"
-	c.Hotkey.Key = "Ctrl+Alt+K"
 	c.Hotkey.Terminals = append(c.Hotkey.Terminals, DefaultTerminals...)
 	c.Capture.Method = "clipboard"
 	c.AutoDetect.Mode = "both"

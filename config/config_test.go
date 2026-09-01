@@ -10,9 +10,6 @@ func TestDefaults(t *testing.T) {
 	if c.Hotkey.Source != "niri" {
 		t.Errorf("default hotkey source = %q, want %q", c.Hotkey.Source, "niri")
 	}
-	if c.Hotkey.Key != "Ctrl+Alt+K" {
-		t.Errorf("default hotkey key = %q, want %q", c.Hotkey.Key, "Ctrl+Alt+K")
-	}
 	if c.Capture.Method != "clipboard" {
 		t.Errorf("default capture method = %q, want %q", c.Capture.Method, "clipboard")
 	}
@@ -45,9 +42,6 @@ user_dir = "/custom/dicts"
 	}
 	if c.Hotkey.Source != "evdev" {
 		t.Errorf("source = %q, want %q", c.Hotkey.Source, "evdev")
-	}
-	if c.Hotkey.Key != "Super+K" {
-		t.Errorf("key = %q, want %q", c.Hotkey.Key, "Super+K")
 	}
 	if c.Capture.Method != "cut" {
 		t.Errorf("method = %q, want %q", c.Capture.Method, "cut")
