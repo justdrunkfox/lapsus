@@ -32,8 +32,11 @@ const (
 	// ioctl numbers for /dev/uinput (linux/uinput.h).
 	uiSetEvbit   = 0x40045564 // _IOW('U', 100, int)
 	uiSetKeybit  = 0x40045565 // _IOW('U', 101, int)
+	uiDevSetup   = 0x405c5503 // _IOW('U', 3, struct uinput_setup)
 	uiDevCreate  = 0x5501     // _IO('U', 1)
 	uiDevDestroy = 0x5502     // _IO('U', 2)
+
+	maxNameSize = 80
 
 	keyRelease = 0
 	keyPress   = 1
@@ -42,6 +45,20 @@ const (
 	// tables only need codes up to the media/function keys.
 	maxKeyCode = 120
 )
+
+// inputID mirrors struct input_id (4 × u16).
+type inputID struct {
+	Bustype, Vendor, Product, Version uint16
+}
+
+// uinputSetup mirrors struct uinput_setup: the device parameters for
+// UI_DEV_SETUP. Field order and sizes must match the kernel struct
+// exactly (8 + 80 + 4 = 92 bytes).
+type uinputSetup struct {
+	ID           inputID
+	Name         [maxNameSize]byte
+	FfEffectsMax uint32
+}
 
 // Keyboard is a created virtual keyboard device.
 type Keyboard struct {
@@ -56,9 +73,11 @@ func ioctl(f *os.File, req, arg uintptr) error {
 	return nil
 }
 
+// setBit passes the keycode AS the ioctl argument: uinput's UI_SET_*
+// handlers compare the raw arg against the maximum (value semantics,
+// not a pointer).
 func (k *Keyboard) setBit(req uintptr, code uint16) error {
-	v := uint32(code)
-	return ioctl(k.f, req, uintptr(unsafe.Pointer(&v)))
+	return ioctl(k.f, req, uintptr(code))
 }
 
 // Open creates the virtual keyboard device. The caller must Close it
@@ -80,6 +99,16 @@ func Open() (*Keyboard, error) {
 			f.Close()
 			return nil, fmt.Errorf("UI_SET_KEYBIT(%d): %w", code, err)
 		}
+	}
+
+	// UI_DEV_SETUP is mandatory before UI_DEV_CREATE on modern kernels
+	// ("write device info first", EINVAL otherwise).
+	var setup uinputSetup
+	setup.ID = inputID{Bustype: 0x06, Version: 1} // BUS_VIRTUAL
+	copy(setup.Name[:], name)
+	if err := ioctl(f, uiDevSetup, uintptr(unsafe.Pointer(&setup))); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("UI_DEV_SETUP: %w", err)
 	}
 	if err := ioctl(f, uiDevCreate, 0); err != nil {
 		f.Close()
