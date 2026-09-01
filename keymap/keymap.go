@@ -1,4 +1,8 @@
-package daemon
+// Package keymap maps between evdev keycodes and the characters they
+// produce in each supported layout. The daemon uses it to translate
+// keystrokes into the word buffer; the uinput injector uses the
+// reverse lookup to type a character by its keycode.
+package keymap
 
 import (
 	"unicode"
@@ -86,10 +90,10 @@ func mapOne(s string) rune {
 	return 0
 }
 
-// charFor translates a keycode into the character it produces under the
+// CharFor translates a keycode into the character it produces under the
 // given layout and shift state. ok=false for keys that produce no
 // character (modifiers, arrows, F-keys, numpad...).
-func charFor(code uint16, shift bool, l layout.Layout) (rune, bool) {
+func CharFor(code uint16, shift bool, l layout.Layout) (rune, bool) {
 	table, ok := charsByLayout[l]
 	if !ok {
 		table = keyChar
@@ -104,10 +108,41 @@ func charFor(code uint16, shift bool, l layout.Layout) (rune, bool) {
 	return pair[0], true
 }
 
-// isWordChar reports whether the character participates in the word
+// IsWordChar reports whether the character participates in the word
 // buffer: letters and digits only. Every other produced character is a
 // word separator: it completes the buffer (space, punctuation, quotes,
 // brackets — anything typed as normal text).
-func isWordChar(r rune) bool {
+func IsWordChar(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// CodeFor is the reverse of CharFor: finds the keycode and shift state
+// that produces r in the given layout. ok=false when r is not on the
+// keyboard in that layout.
+func CodeFor(r rune, l layout.Layout) (code uint16, shift bool, ok bool) {
+	table, ok := charsByLayout[l]
+	if !ok {
+		return 0, false, false
+	}
+	for code, pair := range table {
+		if pair[0] == r {
+			return code, false, true
+		}
+		if pair[1] == r {
+			return code, true, true
+		}
+	}
+	return 0, false, false
+}
+
+// CodeForAny finds the keycode producing r in either layout, reporting
+// which layout matched. Use it to type text that may mix scripts.
+func CodeForAny(r rune) (code uint16, shift bool, l layout.Layout, ok bool) {
+	if c, s, ok := CodeFor(r, layout.LayoutEN); ok {
+		return c, s, layout.LayoutEN, true
+	}
+	if c, s, ok := CodeFor(r, layout.LayoutRU); ok {
+		return c, s, layout.LayoutRU, true
+	}
+	return 0, false, layout.LayoutEN, false
 }

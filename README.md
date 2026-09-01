@@ -20,6 +20,7 @@ A wrong-keyboard-layout fixer for Linux/Wayland, built for [niri](https://github
 - [wtype](https://github.com/atx/wtype) and [wl-clipboard](https://github.com/bugaevc/wl-clipboard)
 - `libnotify-bin` for desktop notifications (optional)
 - membership in the `input` group for the daemon (reads `/dev/input` without grab, without root)
+- for `inject_method = "uinput"`: write access to `/dev/uinput` (deploy/60-lapsus-uinput.rules grants it to the `input` group)
 
 ## Build & install
 
@@ -81,6 +82,7 @@ and focused window                          analyze (dictionaries)
 
 - The word ends on **any printable separator** — space, punctuation, quotes, brackets: `word)` is fixed just like `word `. Enter, Tab, arrows and Ctrl/Alt combos drop the buffer without fixing (the text may already be gone — an executed command, a completion, a moved caret).
 - The replacement is the same everywhere — GUI apps and terminals: BackSpace × word length, then type the fix. No selections, no clipboard involved.
+- Two injection backends: **wtype** (default; keysyms through the compositor — layout-independent) and **uinput** (raw keycodes through a virtual kernel keyboard — works compositor-independent and in raw-input apps; the layout is switched to match each typed character).
 - Devices are rescanned every 3 s (hotplug); the active layout and focused window are tracked via `niri msg --json event-stream`.
 
 ### Tray
@@ -115,6 +117,9 @@ sound  = "bell"        # "bell" (freedesktop), a path to a file, or ""
 
 [daemon]
 tray                   = true  # tray icon: layout flag + toggles
+inject_method          = "wtype"  # "wtype" (keysyms) | "uinput" (raw
+                               # keycodes via /dev/uinput; needs the
+                               # udev rule from deploy/)
 switch_layout          = true  # after 2 consecutive dictionary fixes to
                                # the same language, move the layout there
 switch_after_words     = 2     # 1 = move on every fix; [1, 10]

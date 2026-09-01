@@ -104,9 +104,31 @@ func runDaemonCommand(args []string) {
 		fmt.Fprintln(os.Stderr, "lapsus daemon:", err)
 		os.Exit(1)
 	}
-	dm := daemon.New(cfg, analyze.New(d), &niri.Client{},
-		&wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond},
-		verbose, dryRun)
+	nir := &niri.Client{}
+
+	// Injection backend for the daemon: wtype (keysyms via compositor)
+	// or uinput (raw keycodes via a virtual kernel keyboard).
+	var inj daemon.WordInjector
+	switch cfg.Daemon.InjectMethod {
+	case "uinput":
+		kb, err := uinput.Open()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "lapsus daemon: uinput недоступен, откат на wtype:", err)
+			inj = &wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond}
+			break
+		}
+		defer kb.Close()
+		layoutCtl := &niriLayoutCtl{nir: nir}
+		inj = &uinput.Injector{
+			Dev:          kb,
+			EnsureLayout: layoutCtl.Ensure,
+			Gap:          12 * time.Millisecond,
+		}
+	default:
+		inj = &wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond}
+	}
+
+	dm := daemon.New(cfg, analyze.New(d), nir, inj, verbose, dryRun)
 	dm.ConfigPath = lapsusConfigPath()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -152,6 +174,28 @@ func runUinputProbe() {
 			before.CurrentIdx, after.CurrentIdx)
 	}
 	fmt.Println("готово — проверь, что ghbdtn появилось в поле ввода")
+}
+
+// niriLayoutCtl adapts niri.Client to the layout control the uinput
+// injector needs: it makes the compositor layout match a target.
+type niriLayoutCtl struct {
+	nir *niri.Client
+}
+
+// Ensure switches the compositor layout to target when it differs.
+func (n *niriLayoutCtl) Ensure(target layout.Layout) error {
+	ls, err := n.nir.KeyboardLayouts()
+	if err != nil {
+		return err
+	}
+	idx := niri.LayoutIndex(ls.Names, target)
+	if idx < 0 {
+		return fmt.Errorf("layout %v not found in %v", target, ls.Names)
+	}
+	if idx == ls.CurrentIdx {
+		return nil
+	}
+	return n.nir.SwitchLayout(idx)
 }
 
 // daemonCtl adapts the daemon to the tray controller interface and owns

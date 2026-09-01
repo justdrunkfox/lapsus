@@ -72,6 +72,10 @@ type Config struct {
 		// DefaultLayout is the language for windows of applications the
 		// daemon has not learned yet: "" (off), "en" or "ru".
 		DefaultLayout string `toml:"default_layout"`
+		// InjectMethod selects the injection backend: "wtype" (keysyms
+		// via the compositor) or "uinput" (raw keycodes via a virtual
+		// kernel keyboard; needs access to /dev/uinput).
+		InjectMethod string `toml:"inject_method"`
 	} `toml:"daemon"`
 
 	Feedback struct {
@@ -113,6 +117,7 @@ func Defaults() *Config {
 	c.Daemon.Tray = true
 	c.Daemon.RememberWindowLayout = true
 	c.Daemon.DefaultLayout = ""
+	c.Daemon.InjectMethod = "wtype"
 	c.Feedback.Notify = true
 	c.Feedback.Sound = "bell"
 	c.Dictionary.UserDir = filepath.Join(home, ".config", "lapsus", "dicts")
@@ -184,6 +189,12 @@ func (c *Config) Validate() error {
 
 	if ms := c.Daemon.BoundaryPauseMs; ms != 0 && (ms < 50 || ms > 5000) {
 		issues = append(issues, fmt.Sprintf("daemon.boundary_pause_ms: must be 0 (disabled) or in [50, 5000], got %d", ms))
+	}
+
+	switch c.Daemon.InjectMethod {
+	case "wtype", "uinput":
+	default:
+		issues = append(issues, fmt.Sprintf("daemon.inject_method: must be \"wtype\" or \"uinput\", got %q", c.Daemon.InjectMethod))
 	}
 
 	switch strings.ToLower(c.Daemon.DefaultLayout) {

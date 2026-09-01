@@ -168,6 +168,22 @@ func (k *Keyboard) TypeSequence(codes []uint16, gap time.Duration) error {
 	return nil
 }
 
+// Hold presses a key without releasing it (for modifier sequences).
+func (k *Keyboard) Hold(code uint16) error {
+	if err := k.emit(evKey, code, keyPress); err != nil {
+		return err
+	}
+	return k.emit(evSyn, 0, 0)
+}
+
+// Release releases a held key.
+func (k *Keyboard) Release(code uint16) error {
+	if err := k.emit(evKey, code, keyRelease); err != nil {
+		return err
+	}
+	return k.emit(evSyn, 0, 0)
+}
+
 // Close destroys the virtual device and releases the fd.
 func (k *Keyboard) Close() error {
 	err := ioctl(k.f, uiDevDestroy, 0)

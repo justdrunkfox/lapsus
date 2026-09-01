@@ -28,9 +28,9 @@ import (
 	"github.com/voev/lapsus/config"
 	"github.com/voev/lapsus/evdev"
 	"github.com/voev/lapsus/feedback"
+	"github.com/voev/lapsus/keymap"
 	"github.com/voev/lapsus/layout"
 	"github.com/voev/lapsus/niri"
-	"github.com/voev/lapsus/wayland"
 )
 
 const (
@@ -45,11 +45,18 @@ const (
 )
 
 // Daemon is the running auto-fix instance.
+// WordInjector is the injection surface the daemon needs: replace the
+// word before the caret (including its trailing separator, when there
+// was one) with the corrected text.
+type WordInjector interface {
+	ReplaceWord(old, corrected string) error
+}
+
 type Daemon struct {
 	Cfg     *config.Config
 	Ana     *analyze.Analyzer
 	Niri    *niri.Client
-	Way     *wayland.Tools
+	Inj     WordInjector
 	FB      *feedback.F
 	Verbose bool
 	DryRun  bool
@@ -81,12 +88,12 @@ type Daemon struct {
 }
 
 // New builds a Daemon; Run blocks until its context is cancelled.
-func New(cfg *config.Config, ana *analyze.Analyzer, nir *niri.Client, way *wayland.Tools, verbose, dryRun bool) *Daemon {
+func New(cfg *config.Config, ana *analyze.Analyzer, nir *niri.Client, inj WordInjector, verbose, dryRun bool) *Daemon {
 	return &Daemon{
 		Cfg:  cfg,
 		Ana:  ana,
 		Niri: nir,
-		Way:  way,
+		Inj:  inj,
 		FB: &feedback.F{
 			Notify: cfg.Feedback.Notify,
 			Sound:  cfg.Feedback.Sound,
@@ -375,14 +382,14 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		return
 	}
 
-	ch, ok := charFor(ev.Code, d.shift, d.cur)
+	ch, ok := keymap.CharFor(ev.Code, d.shift, d.cur)
 	if !ok {
 		d.clearBuf() // F-keys, numpad, media keys, anything untranslatable
 		return
 	}
 	d.logf("key %d → %q (layout %v)", ev.Code, ch, d.cur)
 	switch {
-	case isWordChar(ch):
+	case keymap.IsWordChar(ch):
 		d.buf = append(d.buf, ch)
 		d.armPauseTimer()
 	default:
@@ -486,7 +493,7 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 		old += string(sep)
 		fixed += flipped
 	}
-	if err := d.Way.ReplaceWord(old, fixed); err != nil {
+	if err := d.Inj.ReplaceWord(old, fixed); err != nil {
 		d.logf("inject failed: %v", err)
 		return
 	}
