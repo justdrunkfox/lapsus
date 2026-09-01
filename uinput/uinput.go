@@ -70,13 +70,10 @@ func Open() (*Keyboard, error) {
 	}
 	k := &Keyboard{f: f}
 
+	// EV_SYN is always enabled; registering it explicitly returns EINVAL.
 	if err := k.setBit(uiSetEvbit, evKey); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("UI_SET_EVBIT: %w", err)
-	}
-	if err := k.setBit(uiSetEvbit, evSyn); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("UI_SET_EVBIT(SYN): %w", err)
 	}
 	for code := uint16(1); code <= maxKeyCode; code++ {
 		if err := k.setBit(uiSetKeybit, code); err != nil {
