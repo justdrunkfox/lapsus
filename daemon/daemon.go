@@ -622,23 +622,22 @@ func (d *Daemon) flipBufferWord() {
 	if word == "" {
 		return
 	}
-	// Explicit intent, but still dictionary-gated: a double-Alt on an
-	// already-correct word must not turn it into gibberish (hello →
-	// руддщ). Flip only when the flipped reading is a real word and the
-	// original is not.
-	corrected, needsFix := d.Ana.Analyze(word, d.cur)
-	if !needsFix {
-		d.logf("double-alt: %q is not a wrong-layout word, skipping", word)
-		d.clearBuf()
+	// The double-Alt is a pure toggle: flip the buffered word
+	// positionally, unconditionally — even gibberish and even correct
+	// words. The dictionary-gated fixing is the auto-fix path.
+	cur := d.cur
+	flipped := layout.Map(word, cur, layout.Other(cur))
+	d.clearBuf()
+	if flipped == word {
+		d.logf("double-alt: %q maps to itself, nothing to flip", word)
 		return
 	}
-	d.clearBuf()
-	if err := d.Inj.ReplaceWord(word, corrected); err != nil {
+	if err := d.Inj.ReplaceWord(word, flipped); err != nil {
 		d.logf("double-alt inject failed: %v", err)
 		return
 	}
-	d.logf("double-alt: %q → %q", word, corrected)
-	if _, err := d.Niri.SwitchToLayoutOf(corrected); err != nil {
+	d.logf("double-alt: %q → %q", word, flipped)
+	if _, err := d.Niri.SwitchToLayoutOf(flipped); err != nil {
 		d.logf("double-alt layout switch failed: %v", err)
 	}
 }

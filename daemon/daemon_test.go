@@ -836,23 +836,23 @@ func TestDoubleAltRUtoEN(t *testing.T) {
 	}
 }
 
-func TestDoubleAltDoesNotFlipCorrectWord(t *testing.T) {
+func TestDoubleAltTogglesCorrectWordToo(t *testing.T) {
 	rec := &recorder{}
 	nir := &fakeNiri{cur: 0} // EN active
 	f := newTestDaemon(t, rec, nir, 0)
 	f.Cfg.Daemon.DoubleAltFlip = true
 	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0})
 
-	// "hello" is a correct word — double-Alt must leave it alone.
+	// The toggle flips any word — even a correct one (explicit intent).
 	f.typeKeys(keysHello...)
 	altTap(f)
 	altTap(f)
 
-	if rec.injType("руддщ") {
-		t.Errorf("correct word must not be flipped to gibberish")
+	if !rec.injType("руддщ") {
+		t.Errorf("correct word should flip too (pure toggle), calls: %v", rec.calls)
 	}
-	if nir.hasCall("switch-layout") {
-		t.Errorf("layout must not move for a correct word")
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("layout should follow the flipped word, niri calls: %v", nir.calls)
 	}
 }
 
@@ -873,5 +873,26 @@ func TestDoubleAltFlipsRUToEN(t *testing.T) {
 	}
 	if !nir.hasCall("switch-layout 0") {
 		t.Errorf("layout should follow to EN, niri calls: %v", nir.calls)
+	}
+}
+
+func TestDoubleAltFlipsGibberish(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 0)
+	f.Cfg.Daemon.DoubleAltFlip = true
+
+	// Non-dictionary gibberish still flips positionally.
+	f.typeKeys([]uint16{45, 47, 39, 26, 49, 23}...) // x v ; ] n i  →  ч м ж х т ш? — просто коды
+	altTap(f)
+	altTap(f)
+
+	if len(rec.calls) == 0 {
+		t.Log("no mappable chars — nothing to check")
+	}
+	// The point: the toggle is unconditional, so SOME flip must happen
+	// if any char mapped. Codes above are letters → all mappable.
+	if !rec.hasCall("wtype -- ") {
+		t.Errorf("gibberish should flip unconditionally, calls: %v", rec.calls)
 	}
 }
