@@ -815,3 +815,63 @@ func TestDoubleAltEmptyBufferNoop(t *testing.T) {
 		t.Errorf("empty buffer must not inject, calls: %v", rec.calls)
 	}
 }
+
+func TestDoubleAltRUtoEN(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 1} // RU active
+	f := newTestDaemon(t, rec, nir, 0)
+	f.Cfg.Daemon.DoubleAltFlip = true
+	f.Cfg.Daemon.RememberWindowLayout = false
+	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1})
+
+	f.typeKeys(keysRuddsh...) // руддщ
+	altTap(f)
+	altTap(f)
+
+	if !rec.hasCall("wtype -- hello") {
+		t.Errorf("RU→EN flip failed, calls: %v", rec.calls)
+	}
+	if !nir.hasCall("switch-layout 0") {
+		t.Errorf("layout should switch to EN, niri calls: %v", nir.calls)
+	}
+}
+
+func TestDoubleAltDoesNotFlipCorrectWord(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0} // EN active
+	f := newTestDaemon(t, rec, nir, 0)
+	f.Cfg.Daemon.DoubleAltFlip = true
+	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0})
+
+	// "hello" is a correct word — double-Alt must leave it alone.
+	f.typeKeys(keysHello...)
+	altTap(f)
+	altTap(f)
+
+	if rec.injType("руддщ") {
+		t.Errorf("correct word must not be flipped to gibberish")
+	}
+	if nir.hasCall("switch-layout") {
+		t.Errorf("layout must not move for a correct word")
+	}
+}
+
+func TestDoubleAltFlipsRUToEN(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 1} // RU active
+	f := newTestDaemon(t, rec, nir, 0)
+	f.Cfg.Daemon.DoubleAltFlip = true
+	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1})
+
+	// "руддщ" is gibberish in RU — flips to hello, layout follows.
+	f.typeKeys(keysRuddsh...)
+	altTap(f)
+	altTap(f)
+
+	if !rec.injType("hello") {
+		t.Errorf("gibberish word should flip, calls: %v", rec.calls)
+	}
+	if !nir.hasCall("switch-layout 0") {
+		t.Errorf("layout should follow to EN, niri calls: %v", nir.calls)
+	}
+}

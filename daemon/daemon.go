@@ -595,6 +595,7 @@ func (d *Daemon) tapWindow() time.Duration {
 // buffered word and move the layout along with it.
 func (d *Daemon) altDown() {
 	now := time.Now()
+	d.logf("alt down (wait=%v, since last up=%v)", d.altTapWait, now.Sub(d.altLastUp))
 	if d.altTapWait && now.Sub(d.altLastUp) <= d.tapWindow() {
 		d.altTapWait = false
 		d.altDouble = true
@@ -602,6 +603,7 @@ func (d *Daemon) altDown() {
 }
 
 func (d *Daemon) altUp() {
+	d.logf("alt up (double=%v)", d.altDouble)
 	if d.altDouble {
 		d.altDouble = false
 		d.flipBufferWord()
@@ -620,20 +622,23 @@ func (d *Daemon) flipBufferWord() {
 	if word == "" {
 		return
 	}
-	cur := d.cur
-	target := layout.Other(cur)
-	flipped := layout.Map(word, cur, target)
-	if flipped == word {
+	// Explicit intent, but still dictionary-gated: a double-Alt on an
+	// already-correct word must not turn it into gibberish (hello →
+	// руддщ). Flip only when the flipped reading is a real word and the
+	// original is not.
+	corrected, needsFix := d.Ana.Analyze(word, d.cur)
+	if !needsFix {
+		d.logf("double-alt: %q is not a wrong-layout word, skipping", word)
 		d.clearBuf()
 		return
 	}
 	d.clearBuf()
-	if err := d.Inj.ReplaceWord(word, flipped); err != nil {
+	if err := d.Inj.ReplaceWord(word, corrected); err != nil {
 		d.logf("double-alt inject failed: %v", err)
 		return
 	}
-	d.logf("double-alt: %q → %q", word, flipped)
-	if _, err := d.Niri.SwitchToLayoutOf(flipped); err != nil {
+	d.logf("double-alt: %q → %q", word, corrected)
+	if _, err := d.Niri.SwitchToLayoutOf(corrected); err != nil {
 		d.logf("double-alt layout switch failed: %v", err)
 	}
 }
