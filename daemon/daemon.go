@@ -42,8 +42,8 @@ const (
 	// layoutPoll is the periodic layout resync interval (a safety net
 	// for missed KeyboardLayoutSwitched events).
 	layoutPoll = 300 * time.Millisecond
-	// doubleTapWindow is the max gap between the two Alt taps.
-	doubleTapWindow = 300 * time.Millisecond
+	// maxDoubleTapGap bounds doubleTapWindow when the config value is 0.
+	maxDoubleTapGap = 5 * time.Second
 )
 
 // Daemon is the running auto-fix instance.
@@ -582,12 +582,20 @@ func (d *Daemon) resetFixRun() {
 	d.fixRunCount = 0
 }
 
+// tapWindow is the current double-tap window.
+func (d *Daemon) tapWindow() time.Duration {
+	if ms := d.Cfg.Daemon.DoubleAltWindowMs; ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return maxDoubleTapGap
+}
+
 // altDown / altUp implement the double-tap-of-left-Alt detector: two
 // taps within doubleTapWindow with no other key in between flip the
 // buffered word and move the layout along with it.
 func (d *Daemon) altDown() {
 	now := time.Now()
-	if d.altTapWait && now.Sub(d.altLastUp) <= doubleTapWindow {
+	if d.altTapWait && now.Sub(d.altLastUp) <= d.tapWindow() {
 		d.altTapWait = false
 		d.altDouble = true
 	}

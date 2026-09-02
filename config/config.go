@@ -78,6 +78,8 @@ type Config struct {
 		// DoubleAltFlip flips the buffered word to the other layout and
 		// moves the layout there on a double-tap of the left Alt.
 		DoubleAltFlip bool `toml:"double_alt_flip"`
+		// DoubleAltWindowMs is the max gap between the two Alt taps.
+		DoubleAltWindowMs int `toml:"double_alt_window_ms"`
 	} `toml:"daemon"`
 
 	Feedback struct {
@@ -116,6 +118,7 @@ func Defaults() *Config {
 	c.Daemon.SwitchLayout = true
 	c.Daemon.SwitchAfterWords = 2
 	c.Daemon.DoubleAltFlip = false
+	c.Daemon.DoubleAltWindowMs = 1000
 	c.Daemon.Tray = true
 	c.Daemon.RememberWindowLayout = true
 	c.Daemon.DefaultLayout = ""
@@ -203,6 +206,10 @@ func (c *Config) Validate() error {
 	case "", "en", "ru":
 	default:
 		issues = append(issues, fmt.Sprintf("daemon.default_layout: must be \"\", \"en\" or \"ru\", got %q", c.Daemon.DefaultLayout))
+	}
+
+	if w := c.Daemon.DoubleAltWindowMs; w != 0 && (w < 100 || w > 5000) {
+		issues = append(issues, fmt.Sprintf("daemon.double_alt_window_ms: must be 0 (off uses 1000) or in [100, 5000], got %d", w))
 	}
 
 	if w := c.Daemon.SwitchAfterWords; w < 1 || w > 10 {

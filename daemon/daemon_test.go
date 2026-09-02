@@ -754,10 +754,11 @@ func TestDoubleAltSingleTapDoesNothing(t *testing.T) {
 	nir := &fakeNiri{cur: 0}
 	f := newTestDaemon(t, rec, nir, 0) // pause boundary off: it would fix the word itself
 	f.Cfg.Daemon.DoubleAltFlip = true
+	f.Cfg.Daemon.DoubleAltWindowMs = 100 // tiny window: expires fast
 
 	f.typeKeys(keysGhbdtn...)
 	altTap(f)
-	time.Sleep(350 * time.Millisecond) // window expires
+	time.Sleep(150 * time.Millisecond) // window expires
 	altTap(f)
 
 	if rec.hasCall("wtype -- привет") {
