@@ -373,10 +373,16 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	case evdev.KeyLeftAlt:
 		if ev.Value == evdev.ValKeyDown {
 			d.altHeld = true
-			d.altDown()
+			if d.Cfg.Daemon.DoubleAltFlip {
+				d.altDown()
+			} else {
+				d.clearBuf() // trigger off: an Alt press is a combo start
+			}
 		} else if ev.Value == evdev.ValKeyUp {
 			d.altHeld = false
-			d.altUp()
+			if d.Cfg.Daemon.DoubleAltFlip {
+				d.altUp()
+			}
 		}
 		return
 	case evdev.KeyRightAlt:
@@ -388,6 +394,11 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 			d.altHeld = false
 		}
 		return
+	}
+	if ev.Value == evdev.ValKeyDown && ev.Code != evdev.KeyLeftAlt {
+		// Any other key between the taps cancels the double-tap.
+		d.altTapWait = false
+		d.altDouble = false
 	}
 	if d.ctrlHeld || d.altHeld {
 		// A combo is in progress (Alt+letter, Alt+Enter...): drop the
