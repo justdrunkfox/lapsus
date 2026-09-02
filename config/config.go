@@ -75,6 +75,9 @@ type Config struct {
 		// via the compositor) or "uinput" (raw keycodes via a virtual
 		// kernel keyboard; needs access to /dev/uinput).
 		InjectMethod string `toml:"inject_method"`
+		// DoubleAltFlip flips the buffered word to the other layout and
+		// moves the layout there on a double-tap of the left Alt.
+		DoubleAltFlip bool `toml:"double_alt_flip"`
 	} `toml:"daemon"`
 
 	Feedback struct {
@@ -112,6 +115,7 @@ func Defaults() *Config {
 	c.Daemon.MinWordLen = 3
 	c.Daemon.SwitchLayout = true
 	c.Daemon.SwitchAfterWords = 2
+	c.Daemon.DoubleAltFlip = false
 	c.Daemon.Tray = true
 	c.Daemon.RememberWindowLayout = true
 	c.Daemon.DefaultLayout = ""

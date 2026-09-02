@@ -42,6 +42,8 @@ const (
 	// layoutPoll is the periodic layout resync interval (a safety net
 	// for missed KeyboardLayoutSwitched events).
 	layoutPoll = 300 * time.Millisecond
+	// doubleTapWindow is the max gap between the two Alt taps.
+	doubleTapWindow = 300 * time.Millisecond
 )
 
 // Daemon is the running auto-fix instance.
@@ -73,6 +75,12 @@ type Daemon struct {
 	mu         sync.Mutex
 	devices    map[string]bool
 	appLayouts map[string]layout.Layout // app_id → last typed layout
+	// modifier and double-Alt-tap state
+	ctrlHeld   bool
+	altHeld    bool
+	altTapWait bool
+	altDouble  bool
+	altLastUp  time.Time
 	// fix-run tracking: consecutive fixes to the same language move the
 	// layout once the run reaches switch_after_words.
 	fixRunLang  layout.Layout
@@ -352,12 +360,39 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	case evdev.KeyLeftShift, evdev.KeyRightShift:
 		d.shift = ev.Value != evdev.ValKeyUp
 		return
-	case evdev.KeyLeftCtrl, evdev.KeyRightCtrl, evdev.KeyLeftAlt, evdev.KeyRightAlt:
+	case evdev.KeyLeftCtrl, evdev.KeyRightCtrl:
 		if ev.Value == evdev.ValKeyDown {
 			// A shortcut is starting: the buffered word is not going to
 			// end in a fixable way.
+			d.ctrlHeld = true
 			d.clearBuf()
+		} else if ev.Value == evdev.ValKeyUp {
+			d.ctrlHeld = false
 		}
+		return
+	case evdev.KeyLeftAlt:
+		if ev.Value == evdev.ValKeyDown {
+			d.altHeld = true
+			d.altDown()
+		} else if ev.Value == evdev.ValKeyUp {
+			d.altHeld = false
+			d.altUp()
+		}
+		return
+	case evdev.KeyRightAlt:
+		// Right Alt belongs to the compositor hotkey (Multi_key);
+		// the daemon only tracks its held state.
+		if ev.Value == evdev.ValKeyDown {
+			d.altHeld = true
+		} else if ev.Value == evdev.ValKeyUp {
+			d.altHeld = false
+		}
+		return
+	}
+	if d.ctrlHeld || d.altHeld {
+		// A combo is in progress (Alt+letter, Alt+Enter...): drop the
+		// word, it is not going to end in a fixable way.
+		d.clearBuf()
 		return
 	}
 	if ev.Value != evdev.ValKeyDown {
@@ -534,6 +569,54 @@ func (d *Daemon) learnAppLayout() {
 // resetFixRun drops the consecutive-fix run. Caller must hold d.mu.
 func (d *Daemon) resetFixRun() {
 	d.fixRunCount = 0
+}
+
+// altDown / altUp implement the double-tap-of-left-Alt detector: two
+// taps within doubleTapWindow with no other key in between flip the
+// buffered word and move the layout along with it.
+func (d *Daemon) altDown() {
+	now := time.Now()
+	if d.altTapWait && now.Sub(d.altLastUp) <= doubleTapWindow {
+		d.altTapWait = false
+		d.altDouble = true
+	}
+}
+
+func (d *Daemon) altUp() {
+	if d.altDouble {
+		d.altDouble = false
+		d.flipBufferWord()
+		return
+	}
+	d.altTapWait = true
+	d.altLastUp = time.Now()
+}
+
+// flipBufferWord flips the buffered word to the other layout and moves
+// the layout along with it — the explicit "typed in the wrong layout,
+// fix it now" action. The word must still be in the buffer (no
+// separator pressed yet). Caller must hold d.mu.
+func (d *Daemon) flipBufferWord() {
+	word := string(d.buf)
+	if word == "" {
+		return
+	}
+	cur := d.cur
+	target := layout.Other(cur)
+	flipped := layout.Map(word, cur, target)
+	if flipped == word {
+		d.clearBuf()
+		return
+	}
+	d.clearBuf()
+	if err := d.Inj.ReplaceWord(word, flipped); err != nil {
+		d.logf("double-alt inject failed: %v", err)
+		return
+	}
+	d.logf("double-alt: %q → %q", word, flipped)
+	if _, err := d.Niri.SwitchToLayoutOf(flipped); err != nil {
+		d.logf("double-alt layout switch failed: %v", err)
+	}
 }
 
 // restoreAppLayout switches the focused window to the language last

@@ -6,17 +6,42 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/voev/lapsus/analyze"
 	"github.com/voev/lapsus/config"
 	"github.com/voev/lapsus/dict"
 	"github.com/voev/lapsus/evdev"
 	"github.com/voev/lapsus/niri"
-	"github.com/voev/lapsus/wayland"
 )
 
+// fakeInj doubles as the daemon's WordInjector: ReplaceWord records the
+// same call shapes the wtype tools used to emit, so the string
+// assertions in older tests keep working.
 type recorder struct {
 	calls []string
+}
+
+func (r *recorder) ReplaceWord(old, corrected string) error {
+	n := utf8.RuneCountInString(old)
+	args := make([]string, 0, 2*n)
+	for i := 0; i < n; i++ {
+		args = append(args, "-k", "BackSpace")
+	}
+	if n > 0 {
+		r.calls = append(r.calls, "wtype "+strings.Join(args, " "))
+	}
+	r.calls = append(r.calls, "wtype -- "+corrected)
+	return nil
+}
+
+func (r *recorder) injType(s string) bool {
+	for _, c := range r.calls {
+		if c == "wtype -- "+s {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *recorder) run(name string, args []string, stdin []byte) ([]byte, error) {
@@ -82,7 +107,7 @@ func newTestDaemon(t *testing.T, rec *recorder, nir *fakeNiri, pauseMs int) *Dae
 	cfg.Daemon.SwitchAfterWords = 1
 	cfg.Daemon.BoundaryPauseMs = pauseMs
 	dict_ := dict.New()
-	d := New(cfg, analyze.New(dict_), &niri.Client{Run: nir.run}, &wayland.Tools{Run: rec.run}, false, false)
+	d := New(cfg, analyze.New(dict_), &niri.Client{Run: nir.run}, rec, false, false)
 	d.appID = "zcode"
 	d.cur = layoutEN
 	return d
@@ -697,5 +722,95 @@ func TestLayoutPollChangedLayoutDropsBuffer(t *testing.T) {
 	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":0}}}`)
 	if len(f.buf) != 0 {
 		t.Errorf("changed layout must drop the buffer, got %q", string(f.buf))
+	}
+}
+
+func altTap(f *Daemon) {
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftAlt, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftAlt, Value: evdev.ValKeyUp})
+}
+
+func TestDoubleAltFlipsBufferWordAndLayout(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0} // EN active
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.DoubleAltFlip = true
+
+	// Type a wrong-layout word and double-tap left Alt.
+	f.typeKeys(keysGhbdtn...)
+	altTap(f)
+	altTap(f)
+
+	if !rec.injType("привет") {
+		t.Errorf("double-alt should flip the buffer word, calls: %v", rec.calls)
+	}
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("layout should follow the flipped word, niri calls: %v", nir.calls)
+	}
+}
+
+func TestDoubleAltSingleTapDoesNothing(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 0) // pause boundary off: it would fix the word itself
+	f.Cfg.Daemon.DoubleAltFlip = true
+
+	f.typeKeys(keysGhbdtn...)
+	altTap(f)
+	time.Sleep(350 * time.Millisecond) // window expires
+	altTap(f)
+
+	if rec.hasCall("wtype -- привет") {
+		t.Errorf("single tap must not flip, calls: %v", rec.calls)
+	}
+}
+
+func TestDoubleAltCancelledByLetter(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.DoubleAltFlip = true
+
+	f.typeKeys(keysGhbdtn...)
+	altTap(f)
+	// A letter between the taps (Alt+x combo or plain typing) cancels.
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 45, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 45, Value: evdev.ValKeyUp})
+	altTap(f)
+
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype -- ") {
+			t.Errorf("cancelled tap must not flip, got %q", c)
+		}
+	}
+}
+
+func TestDoubleAltDisabledByConfig(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.DoubleAltFlip = false
+
+	f.typeKeys(keysGhbdtn...)
+	altTap(f)
+	altTap(f)
+
+	if rec.injType("привет") || rec.hasCall("wtype -- привет") {
+		t.Errorf("disabled trigger must not flip, calls: %v", rec.calls)
+	}
+}
+
+func TestDoubleAltEmptyBufferNoop(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 300)
+	f.Cfg.Daemon.DoubleAltFlip = true
+
+	// No word typed: the flip is a no-op (nothing in the buffer).
+	altTap(f)
+	altTap(f)
+
+	if rec.hasCall("wtype -- ") {
+		t.Errorf("empty buffer must not inject, calls: %v", rec.calls)
 	}
 }
