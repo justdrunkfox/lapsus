@@ -896,3 +896,15 @@ func TestDoubleAltFlipsGibberish(t *testing.T) {
 		t.Errorf("gibberish should flip unconditionally, calls: %v", rec.calls)
 	}
 }
+
+func TestSingletonLock(t *testing.T) {
+	f := newTestDaemon(t, &recorder{}, &fakeNiri{cur: 0}, 300)
+	unlock, err := f.lockSingleton()
+	if err != nil {
+		t.Fatalf("first lock: %v", err)
+	}
+	defer unlock()
+	if _, err := f.lockSingleton(); err == nil {
+		t.Error("second singleton lock must fail")
+	}
+}

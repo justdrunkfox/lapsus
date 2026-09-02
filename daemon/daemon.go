@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -118,6 +119,12 @@ func New(cfg *config.Config, ana *analyze.Analyzer, nir *niri.Client, inj WordIn
 // toggles the paused state (bind it in niri to:
 // spawn "pkill" "-USR1" "lapsus").
 func (d *Daemon) Run(ctx context.Context) error {
+	unlock, err := d.lockSingleton()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	d.refreshNiriState()
 
 	sig := make(chan os.Signal, 1)
@@ -164,6 +171,26 @@ func (d *Daemon) logf(format string, args ...any) {
 	if d.Verbose {
 		fmt.Fprintf(os.Stderr, "lapsus daemon: "+format+"\n", args...)
 	}
+}
+
+// lockSingleton takes an exclusive lock so that only one daemon runs:
+// two daemons would both react to the same keystrokes and inject twice.
+// The lock lives in XDG_RUNTIME_DIR and dies with the process.
+func (d *Daemon) lockSingleton() (func(), error) {
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	path := filepath.Join(dir, "lapsus.daemon.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("lapsus daemon уже запущен (lock %s занят)", path)
+	}
+	return func() { f.Close() }, nil
 }
 
 // refreshNiriState queries the initial focused window and layouts once,
