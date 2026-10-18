@@ -5,8 +5,6 @@
 package keymap
 
 import (
-	"unicode"
-
 	"github.com/voev/lapsus/layout"
 )
 
@@ -106,14 +104,6 @@ func CharFor(code uint16, shift bool, l layout.Layout) (rune, bool) {
 		return pair[1], true
 	}
 	return pair[0], true
-}
-
-// IsWordChar reports whether the character participates in the word
-// buffer: letters and digits only. Every other produced character is a
-// word separator: it completes the buffer (space, punctuation, quotes,
-// brackets — anything typed as normal text).
-func IsWordChar(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // CodeFor is the reverse of CharFor: finds the keycode and shift state

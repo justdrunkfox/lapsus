@@ -14,7 +14,6 @@ import (
 // Config holds the full application configuration.
 type Config struct {
 	Hotkey struct {
-		Source string `toml:"source"`
 		// Terminals lists niri app_id values of terminal emulators.
 		// Terminals get a different fix path (mouse selection +
 		// clipboard paste) than GUI apps.
@@ -24,10 +23,6 @@ type Config struct {
 	Capture struct {
 		Method string `toml:"method"`
 	} `toml:"capture"`
-
-	AutoDetect struct {
-		Mode string `toml:"mode"`
-	} `toml:"autodetect"`
 
 	Fix struct {
 		// SwitchLayout switches to the layout of the corrected word
@@ -53,7 +48,7 @@ type Config struct {
 		SwitchAfterWords int `toml:"switch_after_words"`
 		// BoundaryPauseMs is the idle time after which the buffered word
 		// counts as finished even without a separator. 0 (default)
-		// disables it: words complete only on real separators, so a
+		// disables it: words complete only on the space separator, so a
 		// thinking pause can never split a word into fragments. A
 		// non-zero value enables the pause boundary at the user's own
 		// risk of fragments.
@@ -80,6 +75,12 @@ type Config struct {
 		DoubleAltFlip bool `toml:"double_alt_flip"`
 		// DoubleAltWindowMs is the max gap between the two Alt taps.
 		DoubleAltWindowMs int `toml:"double_alt_window_ms"`
+		// UndoWindowMs is how long after an auto-fix the fix key reverts
+		// it instead of toggling: the press restores the word as typed,
+		// resets the fix-run and takes back the fix's layout move.
+		// 0 disables the undo; beyond the window the key toggles as
+		// usual.
+		UndoWindowMs int `toml:"undo_window_ms"`
 	} `toml:"daemon"`
 
 	Feedback struct {
@@ -107,10 +108,8 @@ func Defaults() *Config {
 		home = ""
 	}
 	c := &Config{}
-	c.Hotkey.Source = "niri"
 	c.Hotkey.Terminals = append(c.Hotkey.Terminals, DefaultTerminals...)
 	c.Capture.Method = "clipboard"
-	c.AutoDetect.Mode = "both"
 	c.Fix.SwitchLayout = true
 	c.Fix.PauseMs = 50
 	c.Daemon.BoundaryPauseMs = 0
@@ -119,6 +118,7 @@ func Defaults() *Config {
 	c.Daemon.SwitchAfterWords = 2
 	c.Daemon.DoubleAltFlip = false
 	c.Daemon.DoubleAltWindowMs = 1000
+	c.Daemon.UndoWindowMs = 2000
 	c.Daemon.Tray = true
 	c.Daemon.RememberWindowLayout = true
 	c.Daemon.DefaultLayout = ""
@@ -170,22 +170,10 @@ func LoadFile(path string) (*Config, error) {
 func (c *Config) Validate() error {
 	var issues []string
 
-	switch c.Hotkey.Source {
-	case "niri", "evdev":
-	default:
-		issues = append(issues, fmt.Sprintf("hotkey.source: must be 'niri' or 'evdev', got %q", c.Hotkey.Source))
-	}
-
 	switch c.Capture.Method {
 	case "clipboard", "cut":
 	default:
 		issues = append(issues, fmt.Sprintf("capture.method: must be 'clipboard' or 'cut', got %q", c.Capture.Method))
-	}
-
-	switch c.AutoDetect.Mode {
-	case "hotkey", "continuous", "both", "":
-	default:
-		issues = append(issues, fmt.Sprintf("autodetect.mode: must be 'hotkey', 'continuous', 'both', or '', got %q", c.AutoDetect.Mode))
 	}
 
 	if c.Fix.PauseMs < 0 || c.Fix.PauseMs > 2000 {
@@ -210,6 +198,10 @@ func (c *Config) Validate() error {
 
 	if w := c.Daemon.DoubleAltWindowMs; w != 0 && (w < 100 || w > 5000) {
 		issues = append(issues, fmt.Sprintf("daemon.double_alt_window_ms: must be 0 (off uses 1000) or in [100, 5000], got %d", w))
+	}
+
+	if w := c.Daemon.UndoWindowMs; w != 0 && (w < 200 || w > 10000) {
+		issues = append(issues, fmt.Sprintf("daemon.undo_window_ms: must be 0 (disabled) or in [200, 10000], got %d", w))
 	}
 
 	if w := c.Daemon.SwitchAfterWords; w < 1 || w > 10 {

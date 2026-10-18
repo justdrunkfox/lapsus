@@ -7,6 +7,7 @@ package feedback
 import (
 	"context"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -19,7 +20,9 @@ const commandTimeout = 2 * time.Second
 // synchronously so tests can observe them.
 type Runner func(name string, args []string) ([]byte, error)
 
-// F is the feedback sender. A nil *F is a no-op.
+// F is the feedback sender. A nil *F is a no-op. All methods are safe
+// for concurrent use: Fire may run in a goroutine while Set updates the
+// settings from the daemon.
 type F struct {
 	// Notify sends a desktop notification via notify-send (libnotify-bin).
 	Notify bool
@@ -28,6 +31,15 @@ type F struct {
 	Sound string
 	// Run overrides command execution (for tests).
 	Run Runner
+
+	mu sync.Mutex
+}
+
+// Set flips the settings (safe concurrently with Fire).
+func (f *F) Set(notify bool, sound string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Notify, f.Sound = notify, sound
 }
 
 // Fire reports that from was flipped to to. Safe to call with a nil
@@ -36,15 +48,19 @@ func (f *F) Fire(from, to string) {
 	if f == nil {
 		return
 	}
+	f.mu.Lock()
+	notify, sound, run := f.Notify, f.Sound, f.Run
+	f.mu.Unlock()
+
 	msg := truncate(from+" → "+to, 80)
-	if f.Notify {
+	if notify {
 		// -t: auto-expire; without it the notification daemon stacks
 		// every flip forever (DMS keeps them in the center).
-		f.spawn("notify-send", []string{"-a", "lapsus", "-t", "2500", "lapsus", msg})
+		f.spawn(run, "notify-send", []string{"-a", "lapsus", "-t", "2500", "lapsus", msg})
 	}
-	if path := f.soundPath(); path != "" {
+	if path := soundPath(sound); path != "" {
 		if player := soundPlayer(); player != "" {
-			f.spawn(player, []string{path})
+			f.spawn(run, player, []string{path})
 		}
 	}
 }
@@ -54,9 +70,9 @@ func (f *F) Fire(from, to string) {
 // goroutine could lose the race against process exit and never start
 // the child) and zombie-free for the daemon (the re-parented player is
 // sh's child, not ours).
-func (f *F) spawn(name string, args []string) {
-	if f.Run != nil {
-		f.Run(name, args)
+func (f *F) spawn(run Runner, name string, args []string) {
+	if run != nil {
+		run(name, args)
 		return
 	}
 	argv := append([]string{"-c", `"$@" >/dev/null 2>&1 &`, "_", name}, args...)
@@ -66,14 +82,14 @@ func (f *F) spawn(name string, args []string) {
 }
 
 // soundPath resolves the sound setting to a file path, "" for off.
-func (f *F) soundPath() string {
-	switch f.Sound {
+func soundPath(sound string) string {
+	switch sound {
 	case "", "-":
 		return ""
 	case "bell":
 		return bellPath
 	default:
-		return f.Sound
+		return sound
 	}
 }
 

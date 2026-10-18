@@ -207,7 +207,9 @@ func Open(d Device) (*Reader, error) {
 }
 
 // ReadEvent blocks until the next full input_event record. EOF means
-// the device was unplugged.
+// the device was unplugged. The fixed 24-byte layout assumes a 64-bit
+// little-endian kernel (amd64/arm64 are the supported targets); a
+// 32-bit build would misread the timeval offset.
 func (r *Reader) ReadEvent() (Event, error) {
 	var buf [24]byte
 	if _, err := io.ReadFull(r.f, buf[:]); err != nil {

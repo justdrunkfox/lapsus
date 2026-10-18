@@ -7,31 +7,37 @@ import (
 
 func TestDefaults(t *testing.T) {
 	c := Defaults()
-	if c.Hotkey.Source != "niri" {
-		t.Errorf("default hotkey source = %q, want %q", c.Hotkey.Source, "niri")
-	}
 	if c.Capture.Method != "clipboard" {
 		t.Errorf("default capture method = %q, want %q", c.Capture.Method, "clipboard")
 	}
-	if c.AutoDetect.Mode != "both" {
-		t.Errorf("default autodetect mode = %q, want %q", c.AutoDetect.Mode, "both")
+	if c.Daemon.UndoWindowMs != 2000 {
+		t.Errorf("default undo_window_ms = %d, want 2000", c.Daemon.UndoWindowMs)
 	}
 	if !strings.Contains(c.Dictionary.UserDir, "lapsus") {
 		t.Errorf("default user dict dir should point at lapsus, got %q", c.Dictionary.UserDir)
 	}
 }
 
+func TestValidateUndoWindow(t *testing.T) {
+	c := Defaults()
+	c.Daemon.UndoWindowMs = 150
+	if err := c.Validate(); err == nil {
+		t.Error("expected validation error for undo_window_ms=150")
+	}
+	c.Daemon.UndoWindowMs = 0
+	if err := c.Validate(); err != nil {
+		t.Errorf("undo_window_ms=0 (disabled) should validate: %v", err)
+	}
+	c.Daemon.UndoWindowMs = 2000
+	if err := c.Validate(); err != nil {
+		t.Errorf("undo_window_ms=2000 should validate: %v", err)
+	}
+}
+
 func TestParseTOML(t *testing.T) {
 	toml := `
-[hotkey]
-source = "evdev"
-key = "Super+K"
-
 [capture]
 method = "cut"
-
-[autodetect]
-mode = "continuous"
 
 [dictionary]
 user_dir = "/custom/dicts"
@@ -40,17 +46,31 @@ user_dir = "/custom/dicts"
 	if err != nil {
 		t.Fatalf("Parse failed: %v", err)
 	}
-	if c.Hotkey.Source != "evdev" {
-		t.Errorf("source = %q, want %q", c.Hotkey.Source, "evdev")
-	}
 	if c.Capture.Method != "cut" {
 		t.Errorf("method = %q, want %q", c.Capture.Method, "cut")
 	}
-	if c.AutoDetect.Mode != "continuous" {
-		t.Errorf("mode = %q, want %q", c.AutoDetect.Mode, "continuous")
-	}
 	if c.Dictionary.UserDir != "/custom/dicts" {
 		t.Errorf("user_dir = %q, want %q", c.Dictionary.UserDir, "/custom/dicts")
+	}
+}
+
+func TestParseIgnoresRemovedKeys(t *testing.T) {
+	// hotkey.source and autodetect.mode were removed from the config
+	// (dead keys); existing user configs carrying them must keep parsing.
+	toml := `
+[hotkey]
+source = "evdev"
+key = "Super+K"
+
+[autodetect]
+mode = "continuous"
+`
+	c, err := Parse([]byte(toml))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if c.Capture.Method != "clipboard" {
+		t.Errorf("unknown keys must not disturb defaults, method = %q", c.Capture.Method)
 	}
 }
 
@@ -65,29 +85,17 @@ method = "cut"
 	if c.Capture.Method != "cut" {
 		t.Errorf("method = %q, want %q", c.Capture.Method, "cut")
 	}
-	if c.Hotkey.Source != "niri" {
-		t.Errorf("hotkey source should be default %q", c.Hotkey.Source)
-	}
 }
 
 func TestValidate(t *testing.T) {
 	c := Defaults()
-	c.Hotkey.Source = "invalid"
-	err := c.Validate()
-	if err == nil {
-		t.Error("expected validation error for invalid hotkey source")
-	}
-
-	c.Hotkey.Source = "niri"
 	c.Capture.Method = "invalid"
-	err = c.Validate()
-	if err == nil {
+	if err := c.Validate(); err == nil {
 		t.Error("expected validation error for invalid capture method")
 	}
 
 	c.Capture.Method = "clipboard"
-	err = c.Validate()
-	if err != nil {
+	if err := c.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
 }

@@ -59,23 +59,42 @@ func TestCorrectUnknownWord(t *testing.T) {
 	}
 }
 
-func TestCorrectPunctuation(t *testing.T) {
+func TestCapsCyrillic(t *testing.T) {
 	a := New(newTestDict())
 
-	result, needsFix := a.Analyze("ghbdtn!", layout.LayoutEN)
-	if !needsFix {
-		t.Error("expected correction")
+	// Regression: uppercase Cyrillic used to be stripped off as "edge
+	// punctuation", so sentence-start words were silently skipped and
+	// some cases corrupted ("руддЩ" → "hellO" via a mangled core).
+	result, needsFix := a.Analyze("Руддщ", layout.LayoutRU)
+	if !needsFix || result != "Hello" {
+		t.Errorf("Analyze(Руддщ, RU) = %q, %v; want Hello, true", result, needsFix)
 	}
-	if result != "привет!" {
-		t.Errorf("got %q, want %q", result, "привет!")
+	result, needsFix = a.Analyze("руддЩ", layout.LayoutRU)
+	if !needsFix || result != "hellO" {
+		t.Errorf("Analyze(руддЩ, RU) = %q, %v; want hellO, true", result, needsFix)
+	}
+}
+
+func TestPunctuationInsideWord(t *testing.T) {
+	a := New(newTestDict())
+
+	// "hs,f" is "рыба" with EN active: б sits on the comma key. The
+	// whole flipped reading is a dictionary word → fix.
+	result, needsFix := a.Analyze("hs,f", layout.LayoutEN)
+	if !needsFix || result != "рыба" {
+		t.Errorf("Analyze(hs,f, EN) = %q, %v; want рыба, true", result, needsFix)
 	}
 
-	result, needsFix = a.Analyze("(руддщ)", layout.LayoutRU)
-	if !needsFix {
-		t.Error("expected correction")
+	// Real punctuation never survives the dictionary gate: the flipped
+	// reading with the sign attached is not a word.
+	if _, needsFix := a.Analyze("руддщ,", layout.LayoutRU); needsFix {
+		t.Error("руддщ, → hello? is not a word, must not be auto-fixed")
 	}
-	if result != "(hello)" {
-		t.Errorf("got %q, want %q", result, "(hello)")
+	if _, needsFix := a.Analyze("ghbdtn!", layout.LayoutEN); needsFix {
+		t.Error("ghbdtn! → привет! is not a word, must not be auto-fixed")
+	}
+	if _, needsFix := a.Analyze("ghbdtn,", layout.LayoutEN); needsFix {
+		t.Error("ghbdtn, → приветб is not a word, must not be auto-fixed")
 	}
 }
 
@@ -103,14 +122,14 @@ func TestGuessLayout(t *testing.T) {
 
 func TestFlipsTrailingPunctuation(t *testing.T) {
 	a := New(newTestDict())
-	// RU-typed Shift+/ produces ',' — the user meant the EN '?'.
+	// Punctuation handling was removed from Analyze (the daemon only ever
+	// delivers bare words); punctuation-bearing input must stay untouched.
 	corrected, needs := a.Analyze("руддщ,", layout.LayoutRU)
-	if !needs || corrected != "hello?" {
-		t.Errorf("Analyze(руддщ,, RU) = %q, %v; want %q, true", corrected, needs, "hello?")
+	if needs || corrected != "руддщ," {
+		t.Errorf("Analyze(руддщ,, RU) = %q, %v; want unchanged, false", corrected, needs)
 	}
-	// Dots, parens and spaces that are the same in both layouts survive.
 	corrected, needs = a.Analyze("(ghbdtn)", layout.LayoutEN)
-	if !needs || corrected != "(привет)" {
-		t.Errorf("Analyze((ghbdtn), EN) = %q, %v; want %q, true", corrected, needs, "(привет)")
+	if needs || corrected != "(ghbdtn)" {
+		t.Errorf("Analyze((ghbdtn), EN) = %q, %v; want unchanged, false", corrected, needs)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/energye/systray"
@@ -27,13 +28,15 @@ type Controller interface {
 	Feedback() (notify bool, sound string)
 	SetFeedback(notify bool, sound string) error
 	RememberLayout() bool
-	SetRememberLayout(bool)
+	SetRememberLayout(bool) error
 	DefaultLayout() string
 	SetDefaultLayout(string) error
 	Quit()
 }
 
-// Tray holds the menu items that need live updates.
+// Tray holds the menu items that need live updates. The daemon notifies
+// it from its own goroutine (UpdateIcon/UpdatePause) while clicks run on
+// the systray loop, so the cached settings live under mu.
 type Tray struct {
 	ctrl Controller
 
@@ -45,9 +48,11 @@ type Tray struct {
 	mSound    *systray.MenuItem
 	mNotify   *systray.MenuItem
 
-	paused bool
-	sound  string
-	notify bool
+	mu        sync.Mutex
+	paused    bool
+	sound     string
+	notify    bool
+	lastSound string // last non-off sound choice, restored by the toggle
 }
 
 // New builds a Tray over the controller.
@@ -55,6 +60,9 @@ func New(ctrl Controller) *Tray {
 	t := &Tray{ctrl: ctrl}
 	t.paused = ctrl.Paused()
 	t.notify, t.sound = ctrl.Feedback()
+	if t.sound != "" && t.sound != "bell" {
+		t.lastSound = t.sound
+	}
 	return t
 }
 
@@ -94,13 +102,23 @@ func waitWatcher(ctx context.Context) {
 	}
 }
 
+// cachedNotify returns the cached notification setting (thread-safe).
+func (t *Tray) cachedNotify() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.notify
+}
+
 func (t *Tray) onReady() {
-	systray.SetIcon(flagPNG(t.ctrl.CurrentLayout(), t.paused))
+	t.mu.Lock()
+	paused, sound, notify := t.paused, t.sound, t.notify
+	t.mu.Unlock()
+	systray.SetIcon(flagPNG(t.ctrl.CurrentLayout(), paused))
 	systray.SetTitle("lapsus")
 	systray.SetTooltip("lapsus — RU/EN layout fixer")
 
 	t.mAuto = systray.AddMenuItemCheckbox("Автопереключение",
-		"Авто-фикс слов по словарям (демон)", !t.paused)
+		"Авто-фикс слов по словарям (демон)", !paused)
 	t.mRemember = systray.AddMenuItemCheckbox("Запоминать язык окон",
 		"При фокусе окна возвращать язык, на котором в нём печатали", t.ctrl.RememberLayout())
 	mDefault := systray.AddMenuItem("Язык новых окон",
@@ -112,9 +130,9 @@ func (t *Tray) onReady() {
 	t.mDefEn.Click(func() { t.setDefault("en") })
 	t.mDefRu.Click(func() { t.setDefault("ru") })
 	t.mSound = systray.AddMenuItemCheckbox("Звук",
-		"Звук при перевороте", t.sound != "")
+		"Звук при перевороте", sound != "")
 	t.mNotify = systray.AddMenuItemCheckbox("Нотификации",
-		"Системная нотификация при перевороте", t.notify)
+		"Системная нотификация при перевороте", notify)
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Выход", "Остановить lapsus daemon")
 
@@ -122,28 +140,46 @@ func (t *Tray) onReady() {
 		t.ctrl.SetPaused(!t.ctrl.Paused())
 	})
 	t.mRemember.Click(func() {
-		t.ctrl.SetRememberLayout(!t.ctrl.RememberLayout())
+		if err := t.ctrl.SetRememberLayout(!t.ctrl.RememberLayout()); err != nil {
+			feedbackError(err)
+			return
+		}
 		t.syncMenu()
 	})
 	t.mSound.Click(func() {
-		// Toggle between off and the last used (or default) sound.
-		newSound := "bell"
+		// Toggle between off and the last used (or default) sound: a
+		// custom path from the config survives off/on cycling.
+		t.mu.Lock()
+		newSound := ""
 		if t.sound != "" {
-			newSound = ""
+			t.lastSound = t.sound
+		} else if t.lastSound != "" {
+			newSound = t.lastSound
+		} else {
+			newSound = "bell"
 		}
-		if err := t.ctrl.SetFeedback(t.notify, newSound); err != nil {
+		t.mu.Unlock()
+		if err := t.ctrl.SetFeedback(t.cachedNotify(), newSound); err != nil {
 			feedbackError(err)
 			return
 		}
+		t.mu.Lock()
 		t.sound = newSound
+		t.mu.Unlock()
 		t.syncMenu()
 	})
 	t.mNotify.Click(func() {
-		if err := t.ctrl.SetFeedback(!t.notify, t.sound); err != nil {
+		t.mu.Lock()
+		notify := !t.notify
+		sound := t.sound
+		t.mu.Unlock()
+		if err := t.ctrl.SetFeedback(notify, sound); err != nil {
 			feedbackError(err)
 			return
 		}
-		t.notify = !t.notify
+		t.mu.Lock()
+		t.notify = notify
+		t.mu.Unlock()
 		t.syncMenu()
 	})
 	mQuit.Click(func() {
@@ -159,17 +195,20 @@ func feedbackError(err error) {
 
 // syncMenu updates checkbox states from the tray's cached settings.
 func (t *Tray) syncMenu() {
-	if t.paused {
+	t.mu.Lock()
+	paused, sound, notify := t.paused, t.sound, t.notify
+	t.mu.Unlock()
+	if paused {
 		t.mAuto.Uncheck()
 	} else {
 		t.mAuto.Check()
 	}
-	if t.sound != "" {
+	if sound != "" {
 		t.mSound.Check()
 	} else {
 		t.mSound.Uncheck()
 	}
-	if t.notify {
+	if notify {
 		t.mNotify.Check()
 	} else {
 		t.mNotify.Uncheck()
@@ -205,13 +244,18 @@ func (t *Tray) setDefault(v string) {
 
 // UpdateIcon redraws the flag; wire to daemon layout changes.
 func (t *Tray) UpdateIcon(l layout.Layout) {
-	systray.SetIcon(flagPNG(l, t.paused))
+	t.mu.Lock()
+	paused := t.paused
+	t.mu.Unlock()
+	systray.SetIcon(flagPNG(l, paused))
 }
 
 // UpdatePause refreshes the icon dimming and the checkbox; wire to
 // daemon pause changes.
 func (t *Tray) UpdatePause(paused bool) {
+	t.mu.Lock()
 	t.paused = paused
+	t.mu.Unlock()
 	t.UpdateIcon(t.ctrl.CurrentLayout())
 	t.syncMenu()
 }

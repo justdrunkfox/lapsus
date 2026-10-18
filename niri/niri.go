@@ -118,11 +118,25 @@ func MatchLayoutName(name string, target layout.Layout) bool {
 		n == "ru" || strings.HasPrefix(n, "ru-") || strings.HasPrefix(n, "ru_")
 	isEnglish := strings.Contains(n, "engl") || strings.Contains(n, "англ") ||
 		n == "en" || strings.HasPrefix(n, "en-") || strings.HasPrefix(n, "en_") ||
-		strings.Contains(n, "us")
+		hasToken(n, "us")
 	if target == layout.LayoutRU {
 		return isRussian
 	}
 	return isEnglish && !isRussian
+}
+
+// hasToken reports whether the name contains word as a whole token
+// ("English (US)" → tokens "english", "us"). Substring matching would
+// count the "us" in "Belarusian" as English.
+func hasToken(name, word string) bool {
+	for _, t := range strings.FieldsFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	}) {
+		if t == word {
+			return true
+		}
+	}
+	return false
 }
 
 // LayoutIndex maps a target layout to its position among the configured
@@ -207,21 +221,23 @@ func AppIDIn(appID string, list []string) bool {
 }
 
 // EventStream starts `niri msg --json event-stream` and returns its
-// stdout as newline-delimited JSON events. The process is killed when
-// ctx is cancelled. Not available with an injected Runner (tests drive
-// the daemon's state machine directly instead).
-func (c *Client) EventStream(ctx context.Context) (io.ReadCloser, error) {
+// stdout as newline-delimited JSON events plus a wait func: after the
+// stream is fully read, the caller must call it to reap the exited child
+// (skipping Wait leaves a zombie process per reconnect). The process is
+// killed when ctx is cancelled. Not available with an injected Runner
+// (tests drive the daemon's state machine directly instead).
+func (c *Client) EventStream(ctx context.Context) (io.ReadCloser, func() error, error) {
 	if c.Run != nil {
-		return nil, errors.New("EventStream is not available with an injected runner")
+		return nil, nil, errors.New("EventStream is not available with an injected runner")
 	}
 	cmd := exec.CommandContext(ctx, c.binary(), "msg", "--json", "event-stream")
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start niri event-stream: %w", err)
+		return nil, nil, fmt.Errorf("start niri event-stream: %w", err)
 	}
-	return stdout, nil
+	return stdout, cmd.Wait, nil
 }

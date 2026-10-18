@@ -72,6 +72,13 @@ func (t *Tools) SelectPrevWord() error {
 	return t.combo("Left", "ctrl", "shift")
 }
 
+// UndoSelectPrevWord takes back one SelectPrevWord press
+// (Ctrl+Shift+Right): after leftward extension the selection focus sits
+// on the left, so the mirrored word motion shrinks it from that side.
+func (t *Tools) UndoSelectPrevWord() error {
+	return t.combo("Right", "ctrl", "shift")
+}
+
 // Cut cuts the selection (Ctrl+X).
 func (t *Tools) Cut() error {
 	return t.combo("x", "ctrl")

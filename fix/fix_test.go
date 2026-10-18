@@ -397,6 +397,64 @@ func TestFixGUIRefusesExtendedSelection(t *testing.T) {
 	}
 }
 
+func TestFixGUIExtendsThroughPunctuation(t *testing.T) {
+	// "ghjljk;fq" is "продолжай" with EN active: the app's word unit
+	// stops at ';', so the first grab is the fragment "fq". Extension
+	// presses grow the selection across the units; the press that
+	// crosses into the previous word is undone.
+	rec := &recorder{primaryResponses: []string{"", "fq", "ghjljk;fq", " ghjljk;fq", "ghjljk;fq"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rec.hasCall("wtype -- продолжай") {
+		t.Errorf("the whole run should flip, calls: %v", rec.calls)
+	}
+	if !rec.hasCall("-M ctrl -M shift -k Right") {
+		t.Errorf("the crossing press should be undone (Ctrl+Shift+Right), calls: %v", rec.calls)
+	}
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("layout should follow the flipped word, niri calls: %v", nir.calls)
+	}
+}
+
+func TestFixGUIPlainWordExtendsAndUndoes(t *testing.T) {
+	// A plain word also goes through one extension press: it crosses the
+	// space before the word and is undone — the flip stays exactly the word.
+	rec := &recorder{primaryResponses: []string{"", "руддщ", " руддщ", "руддщ"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rec.hasCall("wtype -- hello") {
+		t.Errorf("plain word should still flip, calls: %v", rec.calls)
+	}
+	if !rec.hasCall("-M ctrl -M shift -k Right") {
+		t.Errorf("crossing press should be undone, calls: %v", rec.calls)
+	}
+}
+
+func TestFixGUIExtensionUndoFailsRefuses(t *testing.T) {
+	// If the undo cannot restore the selection, the fix must refuse:
+	// typing over an unknown selection would destroy text.
+	rec := &recorder{primaryResponses: []string{"", "fq", " ghjljk;fq", "unknown-state"}}
+	nir := &fakeNiri{appID: "firefox", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}}
+	f := newTestFixer(t, rec, nir)
+
+	if err := f.Run(Options{}); err == nil {
+		t.Fatal("expected refusal when undo cannot restore the selection")
+	}
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype -- ") {
+			t.Errorf("nothing must be typed over an unknown selection, got %q", c)
+		}
+	}
+}
+
 func TestFixTerminalFlipsSelectedPhrase(t *testing.T) {
 	rec := &recorder{primaryResponses: []string{"руддщ ghbdtn"}}
 	nir := &fakeNiri{appID: "foot", layout: niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}}

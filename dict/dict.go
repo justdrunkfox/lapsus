@@ -81,6 +81,9 @@ func (d *Dict) parseFile(r *strings.Reader, filename string) {
 
 // LoadUserDict loads user dictionary files from the given directory.
 // Missing directory is not an error. User entries override built-in ones.
+// Unreadable files and files not named *en_freq.txt / *ru_freq.txt are
+// skipped with a warning: a broken personal dictionary must never stop
+// the daemon.
 func (d *Dict) LoadUserDict(dir string) error {
 	expanded, err := filepath.Abs(dir)
 	if err != nil {
@@ -93,21 +96,21 @@ func (d *Dict) LoadUserDict(dir string) error {
 		}
 		return err
 	}
-	var readErrs []error
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(expanded, entry.Name()))
-		if err != nil {
-			log.Printf("warning: skipping %s: %v", entry.Name(), err)
-			readErrs = append(readErrs, err)
+		name := entry.Name()
+		if !strings.HasSuffix(name, "en_freq.txt") && !strings.HasSuffix(name, "ru_freq.txt") {
+			log.Printf("lapsus dict: skipping %s: имя должно оканчиваться на en_freq.txt или ru_freq.txt", name)
 			continue
 		}
-		d.parseFile(strings.NewReader(string(data)), entry.Name())
-	}
-	if len(readErrs) > 0 {
-		return readErrs[0]
+		data, err := os.ReadFile(filepath.Join(expanded, name))
+		if err != nil {
+			log.Printf("lapsus dict: skipping %s: %v", name, err)
+			continue
+		}
+		d.parseFile(strings.NewReader(string(data)), name)
 	}
 	return nil
 }

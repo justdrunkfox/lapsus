@@ -8,6 +8,7 @@ A wrong-keyboard-layout fixer for Linux/Wayland, built for [niri](https://github
 
 - **Auto-fix daemon** — reads keystrokes straight from `/dev/input` (no grab, no root), keeps the word being typed in a buffer and fixes it when the word ends — but only when the dictionaries are confident: the flipped reading must be a real word, the original must not. After two consecutive fixes to the same language the daemon moves the layout there, so a wrong-layout phrase self-heals after a word or two.
 - **Hotkey toggle** — one key press flips the word at the caret to the other layout, unconditionally (an explicit key press needs no dictionary), and the layout follows the word. A second hotkey does the same for the current selection, phrase by phrase.
+- **Double-Alt flip** — two quick taps of the left Alt flip the word being typed right now (a pure positional toggle, no dictionary — gibberish flips too) and move the layout along. Off by default (`daemon.double_alt_flip`).
 - **Per-application layout memory** — remembers which language you type in each application and restores it when a window regains focus. New windows of a familiar app start in "their" language; windows of unknown apps can get a configured default language (`daemon.default_layout`).
 - **Tray icon** — the flag of the active layout, dimmed while paused; menu with toggles (auto-fix / sound / notifications), persisted to the config.
 - **Feedback** — desktop notification and a sound on every flip (optional).
@@ -59,7 +60,7 @@ binds {
 }
 ```
 
-- **`lapsus fix`** — flips the word left of the caret, then switches the layout to the fixed word's language.
+- **`lapsus fix`** — flips the word left of the caret, then switches the layout to the fixed word's language. In GUI apps the selection is grown across the application's word units, so words containing `, . ; ' [ ]` — the letters `б ж э ю х ъ` on ЙЦУКЕН — flip whole; the press that crosses into the previous word is undone. If the daemon just auto-fixed a word (within `daemon.undo_window_ms`, with nothing typed since), the same key **reverts that fix** instead: the word goes back as typed and the fix's layout move is taken back — press once more to toggle as usual.
 - **`lapsus fix --selection`** — flips the current selection (mouse or Shift+arrows); a phrase is flipped word by word with whitespace preserved.
 - Debugging: `lapsus fix -v` (step log), `lapsus fix -n` (dry run).
 
@@ -69,7 +70,7 @@ The daemon reads keystrokes directly from `/dev/input` (no grab, no root), keeps
 
 ```
 keyboard (evdev, input group) ──► word buffer ──► boundary:
-                                       ▲          space / , . ; / ? ! :
+                                       ▲          space (the only boundary)
                                        │
 niri event-stream: active layout ──────┘          │
 and focused window                          analyze (dictionaries)
@@ -80,10 +81,11 @@ and focused window                          analyze (dictionaries)
                                  niri msg action switch-layout (last)
 ```
 
-- The word ends on **any printable separator** — space, punctuation, quotes, brackets: `word)` is fixed just like `word `. Enter, Tab, arrows and Ctrl/Alt combos drop the buffer without fixing (the text may already be gone — an executed command, a completion, a moved caret).
+- The word ends on **the space** — the only key that means the same in every layout, so restoring it after a fix is always safe. Punctuation typed inside a word stays in it: on ЙЦУКЕН the keys `, . ; ' [ ]` are the letters `б ж э ю х ъ`, so `hs,f` is `рыба` typed in the wrong layout — the dictionaries fix such a word whole. The fix fires only when the entire flipped reading is a real dictionary word (`ghbdtn,` would flip to `приветб`, which is not a word — it is left alone). Enter, Tab, arrows and Ctrl/Alt combos drop the buffer without fixing (the text may already be gone — an executed command, a completion, a moved caret).
 - The replacement is the same everywhere — GUI apps and terminals: BackSpace × word length, then type the fix. No selections, no clipboard involved.
 - Two injection backends: **wtype** (default; keysyms through the compositor — layout-independent) and **uinput** (raw keycodes through a virtual kernel keyboard — works compositor-independent and in raw-input apps; the layout is switched to match each typed character).
 - Devices are rescanned every 3 s (hotplug); the active layout and focused window are tracked via `niri msg --json event-stream`.
+- `--verbose` logs keycodes and every buffered word to stderr (journald keeps those): do not leave it on permanently — the log then contains what you type, including passwords.
 
 ### Tray
 
@@ -127,19 +129,20 @@ remember_window_layout = true  # restore the last typed language per app
 default_layout         = ""    # language for windows of unknown apps:
                                # "", "en" or "ru" ("" = don't touch)
 exclude_app_ids        = []    # app_ids where auto-fix is off (VMs, games)
-switch_layout      = false # the daemon never moves the layout; hotkeys do
-boundary_pause_ms  = 0    # idle boundary off: a word ends only on a
-                          # printable separator (opt-in, [50, 5000] ms)
-min_word_len       = 3    # shorter words are left alone by the daemon
+boundary_pause_ms      = 0     # idle boundary off: a word ends only on a
+                               # space (opt-in, [50, 5000] ms)
+min_word_len           = 3     # shorter words are left alone by the daemon
+double_alt_flip        = false # double-tap of Left Alt flips the word being
+                               # typed and moves the layout along with it
+double_alt_window_ms   = 1000  # max gap between the two Alt taps, [100, 5000]
+undo_window_ms         = 2000  # the fix key reverts a fresh auto-fix instead
+                               # of toggling; 0 = off, [200, 10000]
 
 [hotkey]
 terminals = ["foot", "kitty", "Alacritty", "wezterm", "ghostty", "st"]
 
 [capture]
 method = "clipboard"     # clipboard (primary selection) | cut (Ctrl+X fallback)
-
-[autodetect]
-mode = "both"            # hotkey | continuous | both
 
 [dictionary]
 user_dir = "~/.config/lapsus/dicts"   # en_freq.txt / ru_freq.txt
@@ -164,12 +167,12 @@ The table in `layout/layout.go` is position-faithful: every character is replace
 - `` ` `` ↔ `ё`, `~` ↔ `Ё`, `<` ↔ `Б`, `>` ↔ `Ю`;
 - digits and unmapped characters pass through unchanged.
 
-Edge punctuation flips along with the word — it was pressed with the same wrong-layout keys: `руддщ,` → `hello?` (RU Shift+/ types `,`, but the user meant `?`). Characters identical in both layouts (brackets, space, `!`) pass unchanged.
+Edge punctuation flips along with the word in the explicit hotkey paths (a selection was flipped) — it was pressed with the same wrong-layout keys: `руддщ,` → `hello?` (RU Shift+/ types `,`, but the user meant `?`). Characters identical in both layouts (brackets, space, `!`) pass unchanged. The daemon completes a word on the space only (restored verbatim); punctuation inside its buffer flips with the word, but the dictionary gate lets a fix through only when the whole flipped reading is a word.
 
 ## Known limitations
 
 - Held-down keys (autorepeat) invalidate the daemon's word buffer — that word is skipped, nothing is corrupted.
-- The last word before Enter is never auto-fixed: Enter drops the buffer so an already-executed command is not touched.
+- The last word before Enter is never auto-fixed: Enter drops the buffer so an already-executed command is not touched. A word closed by punctuation is not auto-fixed either — the sign is layout-dependent, and re-typing it "flipped" would corrupt it.
 - Fast typing during the injection itself can interleave with it (nothing to intercept without a grab).
 - Moving the caret with the mouse is invisible to the daemon — a word typed before the click is not fixed.
 

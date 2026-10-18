@@ -1,9 +1,9 @@
 // Package daemon implements the lapsus auto-fix daemon (M2): it reads
 // keystrokes from evdev devices (without grabbing them), tracks the word
 // being typed, and when the word ends in a way that is safe to fix — a
-// space or punctuation boundary, or an idle pause — replaces it with the
-// corrected version if the dictionaries are confident it was typed in
-// the wrong layout.
+// space boundary or an idle pause — replaces it with the corrected
+// version if the dictionaries are confident it was typed in the wrong
+// layout.
 //
 // Because the daemon knows the word from the keystroke stream itself,
 // the replacement is the same everywhere (GUI apps and terminals):
@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -41,11 +42,27 @@ const (
 	// niriRetry is the reconnect delay for the event stream watcher.
 	niriRetry = 3 * time.Second
 	// layoutPoll is the periodic layout resync interval (a safety net
-	// for missed KeyboardLayoutSwitched events).
-	layoutPoll = 300 * time.Millisecond
+	// for missed KeyboardLayoutSwitched events). The event stream keeps
+	// d.cur in sync normally, so this is deliberately slow — every tick
+	// spawns a `niri msg` process.
+	layoutPoll = time.Second
 	// maxDoubleTapGap bounds doubleTapWindow when the config value is 0.
 	maxDoubleTapGap = 5 * time.Second
+	// undoSocket is the unix socket (in XDG_RUNTIME_DIR) the one-shot
+	// fix CLI uses to hand its press over to the daemon when an
+	// auto-fix is still fresh enough to be undone (plan А4).
+	undoSocket = "lapsus.daemon.sock"
 )
+
+// undoRecord remembers the last auto-fix so the fix key can revert it.
+// old/fixed include the trailing space, exactly as injected.
+type undoRecord struct {
+	old      string
+	fixed    string
+	appID    string
+	at       time.Time
+	switched bool // this fix moved the layout (switch_after_words threshold)
+}
 
 // Daemon is the running auto-fix instance.
 // WordInjector is the injection surface the daemon needs: replace the
@@ -53,6 +70,17 @@ const (
 // was one) with the corrected text.
 type WordInjector interface {
 	ReplaceWord(old, corrected string) error
+}
+
+// keyPress is one buffered keystroke: the raw keycode and the shift
+// state at the moment of the press. The word buffer stores presses, not
+// characters — the text is derived at the word boundary by reading the
+// presses under a layout, so a layout change mid-word (or a missed
+// switch event reconciled by the poll) can no longer corrupt or drop
+// what was typed (plan А1 "двухпрочтение", see TODO.md M4).
+type keyPress struct {
+	code  uint16
+	shift bool
 }
 
 type Daemon struct {
@@ -87,13 +115,19 @@ type Daemon struct {
 	fixRunLang  layout.Layout
 	fixRunCount int
 	shift       bool
-	buf         []rune
+	buf         []keyPress
 	gen         uint64
-	timer       *time.Timer
-	cur         layout.Layout
-	appID       string
-	paused      bool
-	warned      bool
+	// undo state: the last auto-fix the fix key can still revert, and
+	// the last text-affecting keydown (modifiers and the fix key itself
+	// excluded) — undo is only allowed when nothing was typed since.
+	undo       undoRecord
+	hasUndo    bool
+	lastAction time.Time
+	timer      *time.Timer
+	cur        layout.Layout
+	appID      string
+	paused     bool
+	warned     bool
 }
 
 // New builds a Daemon; Run blocks until its context is cancelled.
@@ -143,6 +177,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.watchNiri(ctx)
 	go d.superviseDevices(ctx)
 	go d.pollLayouts(ctx)
+	go d.serveUndo(ctx)
 
 	<-ctx.Done()
 	return nil
@@ -206,8 +241,13 @@ func (d *Daemon) refreshNiriState() {
 	}
 }
 
-// setLayouts updates the active layout and clears the word buffer:
-// characters from different layouts do not mix into a fixable word.
+// setLayouts updates the active layout. The word buffer survives: it
+// stores raw presses, and the boundary reading adapts to the reconciled
+// layout — a word typed entirely during a staleness window still fixes
+// correctly. The reading under each layout stays pure; text received by
+// the application across a real mid-word switch is mixed, and the
+// dictionary gate simply stays silent unless the pure reading makes
+// sense.
 func (d *Daemon) setLayouts(ls *niri.KeyboardLayouts) {
 	d.mu.Lock()
 	var cur layout.Layout
@@ -224,9 +264,7 @@ func (d *Daemon) setLayouts(ls *niri.KeyboardLayouts) {
 		d.logf("unrecognized layout names %v, assuming EN", ls.Names)
 	}
 	if changed {
-		// A real layout change: mixed-layout characters are garbage, and
-		// the fix-run counter belongs to the old layout.
-		d.buf = nil
+		// The fix-run counter belongs to the old layout.
 		d.gen++
 		d.fixRunCount = 0
 	}
@@ -241,19 +279,21 @@ func (d *Daemon) setLayouts(ls *niri.KeyboardLayouts) {
 // with a fixed delay on failures.
 func (d *Daemon) watchNiri(ctx context.Context) {
 	for ctx.Err() == nil {
-		stream, err := d.Niri.EventStream(ctx)
+		stream, wait, err := d.Niri.EventStream(ctx)
 		if err != nil {
 			d.logf("event stream unavailable: %v", err)
 		} else {
 			sc := bufio.NewScanner(stream)
 			for sc.Scan() {
 				if ctx.Err() != nil {
-					stream.Close()
-					return
+					break
 				}
 				d.handleStreamEvent(sc.Text())
 			}
 			stream.Close()
+			// The child is dead by EOF; Wait only reaps it. Without this
+			// every stream reconnect would leave a zombie process.
+			_ = wait()
 		}
 		if ctx.Err() != nil {
 			return
@@ -312,15 +352,22 @@ func (d *Daemon) handleStreamEvent(line string) {
 	}
 }
 
+// ownDevice reports whether the evdev device belongs to lapsus itself:
+// reading our own virtual keyboard would feed the injections back into
+// the word buffer. This is what keeps injections invisible on the evdev
+// side (plan А2); the wtype backend is invisible structurally — the
+// compositor consumes keysyms without creating evdev devices.
+func ownDevice(name string) bool {
+	return strings.Contains(strings.ToLower(name), "lapsus")
+}
+
 // superviseDevices periodically rescans input devices, opening new
 // keyboards and retiring dead readers (hotplug).
 func (d *Daemon) superviseDevices(ctx context.Context) {
 	for ctx.Err() == nil {
 		if devs, err := evdev.Discover(); err == nil {
 			for _, dev := range devs {
-				if strings.Contains(strings.ToLower(dev.Name), "lapsus") {
-					// Our own uinput keyboard: reading it would feed
-					// our injections back into the word buffer.
+				if ownDevice(dev.Name) {
 					continue
 				}
 				d.mu.Lock()
@@ -422,6 +469,13 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		}
 		return
 	}
+	// Everything past the modifier cases is a non-modifier key; a press
+	// or autorepeat of it affects the text one way or another. The fix
+	// key (right Alt) returns inside its own case and never counts here,
+	// so the undo gate stays clean when the key doubles as undo.
+	if ev.Value != evdev.ValKeyUp {
+		d.lastAction = time.Now()
+	}
 	if ev.Value == evdev.ValKeyDown && ev.Code != evdev.KeyLeftAlt {
 		// Any other key between the taps cancels the double-tap.
 		d.altTapWait = false
@@ -460,18 +514,38 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		d.clearBuf() // F-keys, numpad, media keys, anything untranslatable
 		return
 	}
-	d.logf("key %d → %q (layout %v)", ev.Code, ch, d.cur)
-	switch {
-	case keymap.IsWordChar(ch):
-		d.buf = append(d.buf, ch)
-		d.armPauseTimer()
-	default:
-		// Any printable separator (space, punctuation, quotes, brackets)
-		// completes the word: it is typed as normal text and the word
-		// before it is definitely finished. The separator itself is
-		// passed along so the fix can restore it.
+	// Deliberately without the character: -v goes to journald, and the
+	// keystroke stream includes passwords typed anywhere.
+	d.logf("key %d (layout %v)", ev.Code, d.cur)
+	if ch == ' ' {
+		// Only the space completes the word: it sits on the same key in
+		// every layout, so restoring it after the fix is always right.
 		d.finishWord(ch)
+		return
 	}
+	// Everything else printable joins the word: the Russian б ж э ю х ъ
+	// sit on the punctuation keys , . ; ' [ ], so a wrong-layout word
+	// contains "punctuation" ("hs,f" is "рыба"). The dictionary gate in
+	// maybeFix only fires when the whole flipped reading is a real word,
+	// so genuinely punctuated text ("ок,") is never touched.
+	//
+	// The press is buffered raw, without the character: the reading is
+	// derived at the boundary under the then-current layout.
+	d.buf = append(d.buf, keyPress{code: ev.Code, shift: d.shift})
+	d.armPauseTimer()
+}
+
+// reading renders the buffered presses as text under layout l. Every
+// buffered press is translatable by construction (untranslatable keys
+// clear the buffer before they can be appended).
+func (d *Daemon) reading(presses []keyPress, l layout.Layout) string {
+	var b strings.Builder
+	for _, p := range presses {
+		if ch, ok := keymap.CharFor(p.code, p.shift, l); ok {
+			b.WriteRune(ch)
+		}
+	}
+	return b.String()
 }
 
 // clearBuf drops the buffered word and invalidates the pause timer.
@@ -483,7 +557,8 @@ func (d *Daemon) clearBuf() {
 // armPauseTimer (re)starts the idle timer that treats the buffered word
 // as finished. It is only armed when the pause boundary is enabled:
 // a non-zero boundary_pause_ms. A too-short pause splits slow-typed
-// words into fragments, so the default is 0 (separators only); the
+// words into fragments, so the default is 0 (the space boundary only);
+// the
 // generation counter discards stale firings after the buffer changed.
 func (d *Daemon) armPauseTimer() {
 	pause := time.Duration(d.Cfg.Daemon.BoundaryPauseMs) * time.Millisecond
@@ -506,27 +581,30 @@ func (d *Daemon) armPauseTimer() {
 }
 
 // finishWord takes the buffered word and tries to fix it. sep is the
-// separator character that completed the word (0 for the pause boundary):
-// it has already reached the application and sits between the word and
-// the caret, so the fix must delete and re-type it as well. Caller must
-// hold d.mu.
+// separator that completed the word — always a space (0 for the pause
+// boundary): it has already reached the application and sits between the
+// word and the caret, so the fix must delete and re-type it as well.
+// Caller must hold d.mu.
 func (d *Daemon) finishWord(sep rune) {
 	if len(d.buf) == 0 {
 		return
 	}
-	word := string(d.buf)
+	presses := d.buf
 	d.clearBuf()
+	word := d.reading(presses, d.cur)
 	if sep != 0 {
 		d.logf("word %q complete (sep %q)", word, sep)
 	} else {
 		d.logf("word %q complete (pause)", word)
 	}
-	d.maybeFix(word, sep)
+	d.maybeFix(presses, word, sep)
 }
 
 // maybeFix decides whether the word must be corrected and injects the
-// fix. Caller must hold d.mu.
-func (d *Daemon) maybeFix(word string, sep rune) {
+// fix. word is the reading of presses under the layout believed active —
+// the text the application received when d.cur is right, which the
+// dictionaries then judge exactly like before. Caller must hold d.mu.
+func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) {
 	if d.paused {
 		d.logf("paused, skipping %q", word)
 		return
@@ -553,25 +631,28 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 		d.logf("dry run: would replace %q with %q", word, corrected)
 		return
 	}
-	// The separator sits between the word and the caret: delete it with
-	// the word and type it back after the fix — flipped to the corrected
-	// word's layout, same as the word itself. The user pressed the same
-	// physical keys while intending the other layout: RU-typed "руддщ,"
-	// (Shift+/ → «,») must become "hello?" — the comma was what the wrong
-	// layout produced, "?" is what the user meant.
+	// The space sits between the word and the caret: delete it with the
+	// word and type it back after the fix, verbatim — the space is the
+	// one separator identical in every layout. Only a space can complete
+	// a word (the pause boundary passes sep=0), so there is nothing to
+	// flip here.
 	old, fixed := word, corrected
 	if sep != 0 {
-		target := analyze.GuessLayout(corrected)
-		flipped := layout.Map(string(sep), d.cur, target)
 		old += string(sep)
-		fixed += flipped
+		fixed += string(sep)
 	}
 	if err := d.Inj.ReplaceWord(old, fixed); err != nil {
 		d.logf("inject failed: %v", err)
 		return
 	}
 	d.logf("fixed %q → %q", word, corrected)
-	d.FB.Fire(word, corrected)
+	// The fix key can revert this while it is fresh (plan А4): remember
+	// exactly what was injected and what stood there before.
+	d.undo = undoRecord{old: old, fixed: fixed, appID: d.appID, at: time.Now()}
+	d.hasUndo = true
+	// Off the input path: Fire spawns processes, and a stall there must
+	// not freeze keystroke handling (the FB fields are race-safe).
+	go d.FB.Fire(word, corrected)
 	if d.Cfg.Daemon.SwitchLayout {
 		// Consecutive fixes to the same language mean a wrong-layout
 		// episode: once it reaches the threshold, move the layout so the
@@ -584,8 +665,12 @@ func (d *Daemon) maybeFix(word string, sep rune) {
 		d.fixRunCount++
 		if d.fixRunCount >= d.Cfg.Daemon.SwitchAfterWords {
 			d.resetFixRun()
-			if _, err := d.Niri.SwitchToLayoutOf(corrected); err != nil {
+			switched, err := d.Niri.SwitchToLayoutOf(corrected)
+			if err != nil {
 				d.logf("cannot switch layout: %v", err)
+			}
+			if switched && d.hasUndo {
+				d.undo.switched = true // the undo takes the move back
 			}
 		}
 	}
@@ -602,6 +687,106 @@ func (d *Daemon) learnAppLayout() {
 		return
 	}
 	d.appLayouts[d.appID] = d.cur
+}
+
+// Undo reverts the last auto-fix: the corrected text is replaced by what
+// was typed before, the fix-run resets so the layout stops drifting, and
+// a layout move made by this very fix is taken back. ok=false when there
+// is nothing fresh to undo — the fix was too long ago, text was typed or
+// moved since (the caret may be elsewhere), or the focus moved to
+// another application — and the caller does its normal toggle instead.
+func (d *Daemon) Undo() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.hasUndo {
+		return false
+	}
+	window := time.Duration(d.Cfg.Daemon.UndoWindowMs) * time.Millisecond
+	if window <= 0 || time.Since(d.undo.at) > window {
+		return false
+	}
+	if !d.lastAction.Before(d.undo.at) {
+		return false
+	}
+	if d.appID != d.undo.appID {
+		return false
+	}
+	rec := d.undo
+	d.hasUndo = false
+	if err := d.Inj.ReplaceWord(rec.fixed, rec.old); err != nil {
+		d.logf("undo inject failed: %v", err)
+		return false
+	}
+	d.resetFixRun()
+	if rec.switched {
+		if _, err := d.Niri.SwitchToLayoutOf(rec.old); err != nil {
+			d.logf("undo layout switch failed: %v", err)
+		}
+	}
+	d.logf("undo: %q → %q", rec.fixed, rec.old)
+	d.FB.Fire(rec.fixed, rec.old)
+	return true
+}
+
+// undoSocketPath mirrors lockSingleton's directory: the socket lives in
+// XDG_RUNTIME_DIR and dies with the session.
+func undoSocketPath() string {
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, undoSocket)
+}
+
+// serveUndo answers the one-shot fix CLI: an "undo" line reverts the
+// last auto-fix when it is still fresh ("ok") or is declined ("no"), in
+// which case the CLI does its normal toggle.
+func (d *Daemon) serveUndo(ctx context.Context) {
+	path := undoSocketPath()
+	os.Remove(path) // a stale socket file from a crashed instance
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		d.logf("undo socket unavailable: %v", err)
+		return
+	}
+	defer ln.Close()
+	defer os.Remove(path)
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+	}()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			d.logf("undo accept: %v", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		go d.handleUndoConn(conn)
+	}
+}
+
+func (d *Daemon) handleUndoConn(conn net.Conn) {
+	defer conn.Close()
+	buf := make([]byte, 64)
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	n, err := conn.Read(buf)
+	if err != nil || strings.TrimSpace(string(buf[:n])) != "undo" {
+		return
+	}
+	reply := "no\n"
+	if d.Undo() {
+		reply = "ok\n"
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, _ = conn.Write([]byte(reply))
 }
 
 // resetFixRun drops the consecutive-fix run. Caller must hold d.mu.
@@ -645,25 +830,26 @@ func (d *Daemon) altUp() {
 // fix it now" action. The word must still be in the buffer (no
 // separator pressed yet). Caller must hold d.mu.
 func (d *Daemon) flipBufferWord() {
-	word := string(d.buf)
-	if word == "" {
+	if len(d.buf) == 0 {
 		return
 	}
-	// The double-Alt is a pure toggle: flip the buffered word
+	presses := d.buf
+	d.clearBuf()
+	// The double-Alt is a pure toggle: flip the buffered presses
 	// positionally, unconditionally — even gibberish and even correct
 	// words. The dictionary-gated fixing is the auto-fix path.
 	cur := d.cur
-	flipped := layout.Map(word, cur, layout.Other(cur))
-	d.clearBuf()
-	if flipped == word {
-		d.logf("double-alt: %q maps to itself, nothing to flip", word)
+	typed := d.reading(presses, cur)
+	flipped := d.reading(presses, layout.Other(cur))
+	if flipped == typed {
+		d.logf("double-alt: %q maps to itself, nothing to flip", typed)
 		return
 	}
-	if err := d.Inj.ReplaceWord(word, flipped); err != nil {
+	if err := d.Inj.ReplaceWord(typed, flipped); err != nil {
 		d.logf("double-alt inject failed: %v", err)
 		return
 	}
-	d.logf("double-alt: %q → %q", word, flipped)
+	d.logf("double-alt: %q → %q", typed, flipped)
 	if _, err := d.Niri.SwitchToLayoutOf(flipped); err != nil {
 		d.logf("double-alt layout switch failed: %v", err)
 	}
@@ -806,8 +992,7 @@ func (d *Daemon) SetFeedback(notify bool, sound string) error {
 	d.Cfg.Feedback.Notify = notify
 	d.Cfg.Feedback.Sound = sound
 	if d.FB != nil {
-		d.FB.Notify = notify
-		d.FB.Sound = sound
+		d.FB.Set(notify, sound)
 	}
 	d.mu.Unlock()
 	if d.ConfigPath == "" {

@@ -117,7 +117,8 @@ func Open() (*Keyboard, error) {
 	return k, nil
 }
 
-// inputEvent mirrors linux/input_event on 64-bit platforms.
+// inputEvent mirrors linux/input_event on 64-bit platforms (amd64/arm64
+// are the supported targets; a 32-bit kernel has a shorter timeval).
 type inputEvent struct {
 	Sec, Usec int64
 	Type      uint16

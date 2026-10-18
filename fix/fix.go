@@ -116,6 +116,17 @@ func (f *Fixer) fixGUI(opts Options) error {
 	}
 	sel := f.Way.ReadPrimaryWithRetries(primaryReadAttempts)
 
+	// A GUI application selects only its own "word" unit and stops at
+	// punctuation — but on ЙЦУКЕН those keys carry б ж э ю х ъ, so a
+	// wrong-layout word arrives as a fragment ("fq" out of "ghjljk;fq").
+	// Grow the selection across the units; the press that crosses into
+	// the previous run is undone.
+	sel, err := f.extendToRun(sel, opts)
+	if err != nil {
+		f.Way.CollapseSelection()
+		return err
+	}
+
 	word, ok := sanitizeSelection(sel)
 	if !ok {
 		if sel != "" {
@@ -130,6 +141,61 @@ func (f *Fixer) fixGUI(opts Options) error {
 	return f.toggleWord(word, opts, func() {
 		f.Way.CollapseSelection()
 	})
+}
+
+// maxExtendPresses bounds the leftward selection growth: app word-units
+// within a maxWordLen run.
+const maxExtendPresses = 8
+
+// extendToRun grows the selection leftward while the run continues: each
+// Ctrl+Shift+Left press grabs one more application word-unit (apps stop
+// at the very characters that are letters in the other layout). A press
+// that crosses into the previous run — whitespace or a line break in the
+// grown selection — means the run is complete; it is undone with
+// Ctrl+Shift+Right and verified, so the selection always ends up exactly
+// the text being flipped.
+func (f *Fixer) extendToRun(sel string, opts Options) (string, error) {
+	if sel == "" {
+		return sel, nil
+	}
+	for range maxExtendPresses {
+		if err := f.Way.SelectPrevWord(); err != nil {
+			return "", err
+		}
+		grown := f.Way.ReadPrimaryWithRetries(primaryReadAttempts)
+		if grown == "" || grown == sel {
+			// The app stopped extending: the whole run is selected.
+			return sel, nil
+		}
+		if !strings.HasSuffix(grown, sel) {
+			return "", fmt.Errorf("selection changed unexpectedly (%d bytes, had %q)", len(grown), sel)
+		}
+		prefix := strings.TrimSuffix(grown, sel)
+		if strings.ContainsAny(prefix, " \t\n\r") {
+			// Crossed into the previous run (or the previous line):
+			// take the last press back and keep the run selected.
+			f.logf(opts, "extension crossed %q — undoing", prefix)
+			if err := f.undoExtend(sel); err != nil {
+				return "", err
+			}
+			return sel, nil
+		}
+		sel = grown
+	}
+	return sel, nil
+}
+
+// undoExtend takes back the last leftward press and verifies the
+// selection is back to want; a mismatch leaves the selection state
+// unknown and must abort the fix.
+func (f *Fixer) undoExtend(want string) error {
+	if err := f.Way.UndoSelectPrevWord(); err != nil {
+		return err
+	}
+	if got := f.Way.ReadPrimary(); got != want {
+		return fmt.Errorf("cannot restore selection after extension (got %d bytes, want %q)", len(got), want)
+	}
+	return nil
 }
 
 // toggleWord replaces word with its other-layout flip and switches the

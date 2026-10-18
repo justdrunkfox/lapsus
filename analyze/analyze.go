@@ -39,83 +39,33 @@ func GuessLayout(text string) layout.Layout {
 // Analyze checks if a word was typed in the wrong layout and returns the
 // corrected version. needsFix is true if the word should be replaced.
 //
-// Leading and trailing punctuation is preserved, but flipped to the
-// other layout along with the word: the user pressed the same physical
-// keys while intending the other layout, so RU-typed "руддщ," (Shift+/
-// on ЙЦУКЕН) becomes "hello?" — the comma is what that key produces in
-// the wrong layout, and "?" is what the user meant.
+// The word is whatever the daemon buffered between spaces: letters,
+// digits and punctuation-key characters (the Russian б ж э ю х ъ sit on
+// , . ; ' [ ]). The whole string flips positionally — case comes along
+// naturally via the layout table ("Руддщ" → "Hello") — and must read as
+// a single dictionary word in the other layout: "hs,f" → "рыба" fixes,
+// while "ghbdtn," (→ "приветб", not a word) is left untouched.
 func (a *Analyzer) Analyze(word string, currentLayout layout.Layout) (corrected string, needsFix bool) {
-	// Strip trailing/leading punctuation, preserve it flipped.
-	leading, core, trailing := stripPunctuation(word)
+	otherLayout := layout.Other(currentLayout)
+	mapped := layout.Map(word, currentLayout, otherLayout)
 
-	// Map the core word to the other layout
-	otherLayout := layout.LayoutEN
-	if currentLayout == layout.LayoutEN {
-		otherLayout = layout.LayoutRU
-	}
-	mapped := layout.Map(core, currentLayout, otherLayout)
-
-	// If the mapped version is the same as the original, no layout fix possible.
-	if mapped == core {
+	// Nothing maps (digits, same-key symbols): a layout fix is impossible.
+	if mapped == word {
 		return word, false
 	}
 
-	// Score original in current layout dict
-	origScore := a.dict.Score(core, currentLayout)
-	// Score mapped version in the OTHER layout dict (where it would be a real word)
+	// Fix only on clear evidence: the flipped reading is a known word and
+	// the original is not. If both are known, the flipped one must win by
+	// a wide margin (conservative threshold).
+	origScore := a.dict.Score(word, currentLayout)
 	mappedScore := a.dict.Score(mapped, otherLayout)
 
-	// If the mapped version is a known word in the other layout, and the
-	// original is NOT a known word in the current layout, it's likely wrong.
 	if mappedScore > 0 && origScore == 0 {
-		return layout.Map(leading, currentLayout, otherLayout) + mapped + layout.Map(trailing, currentLayout, otherLayout), true
+		return mapped, true
 	}
-
-	// If both are known words, prefer the higher score.
-	// Threshold: mapped must score at least 2x the original to override.
 	if mappedScore > 0 && origScore > 0 && mappedScore >= origScore*2 {
-		return layout.Map(leading, currentLayout, otherLayout) + mapped + layout.Map(trailing, currentLayout, otherLayout), true
+		return mapped, true
 	}
 
 	return word, false
-}
-
-// stripPunctuation separates leading/trailing non-alphanumeric characters.
-func stripPunctuation(word string) (leading, core, trailing string) {
-	runes := []rune(word)
-
-	// Find start of alphanumeric core
-	start := 0
-	for start < len(runes) {
-		r := runes[start]
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '\u0430' && r <= '\u044f') || r == '\u0451' || r == '\u0401' ||
-			(r >= '0' && r <= '9') {
-			break
-		}
-		start++
-	}
-
-	// Find end of alphanumeric core
-	end := len(runes) - 1
-	for end >= start {
-		r := runes[end]
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '\u0430' && r <= '\u044f') || r == '\u0451' || r == '\u0401' ||
-			(r >= '0' && r <= '9') {
-			break
-		}
-		end--
-	}
-	end++
-
-	if start > 0 {
-		leading = string(runes[:start])
-	}
-	if end < len(runes) {
-		trailing = string(runes[end:])
-	}
-	core = string(runes[start:end])
-
-	return leading, core, trailing
 }

@@ -4,6 +4,10 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
+# Needs the session environment in the systemd user manager:
+# WAYLAND_DISPLAY (wtype, wl-clipboard) and NIRI_SOCKET (niri msg).
+# The niri session imports them; otherwise run once:
+#   systemctl --user import-environment WAYLAND_DISPLAY NIRI_SOCKET
 ExecStart=%h/.local/bin/lapsus daemon
 Restart=on-failure
 RestartSec=2

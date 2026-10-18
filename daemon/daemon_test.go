@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -17,8 +18,11 @@ import (
 
 // fakeInj doubles as the daemon's WordInjector: ReplaceWord records the
 // same call shapes the wtype tools used to emit, so the string
-// assertions in older tests keep working.
+// assertions in older tests keep working. The pause-timer goroutine
+// writes calls while the test goroutine polls them, so the slice is
+// guarded.
 type recorder struct {
+	mu    sync.Mutex
 	calls []string
 }
 
@@ -28,6 +32,8 @@ func (r *recorder) ReplaceWord(old, corrected string) error {
 	for i := 0; i < n; i++ {
 		args = append(args, "-k", "BackSpace")
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if n > 0 {
 		r.calls = append(r.calls, "wtype "+strings.Join(args, " "))
 	}
@@ -36,6 +42,8 @@ func (r *recorder) ReplaceWord(old, corrected string) error {
 }
 
 func (r *recorder) injType(s string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, c := range r.calls {
 		if c == "wtype -- "+s {
 			return true
@@ -45,11 +53,15 @@ func (r *recorder) injType(s string) bool {
 }
 
 func (r *recorder) run(name string, args []string, stdin []byte) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
 	return nil, nil
 }
 
 func (r *recorder) hasCall(substr string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, c := range r.calls {
 		if strings.Contains(c, substr) {
 			return true
@@ -175,15 +187,12 @@ func TestDaemonFixesRUWordTypedInRULayout(t *testing.T) {
 	d := newTestDaemon(t, rec, nir, 300)
 	d.cur = layoutRU
 
-	// "руддщ" typed while RU is active (meant English).
+	// "руддщ" typed while RU is active (meant English), closed by space.
 	d.typeKeys(keysRuddsh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySlash, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
 
-	// Slash in RU produces '.' — a fix boundary; "руддщ" maps to "hello",
-	// and the punctuation flips to the other layout along with the word:
-	// RU '.' is the EN '/' key.
-	if !rec.hasCall("wtype -- hello/") {
-		t.Errorf("expected the corrected word with the flipped dot, calls: %v", rec.calls)
+	if !rec.hasCall("wtype -- hello ") {
+		t.Errorf("expected the corrected word with the space restored, calls: %v", rec.calls)
 	}
 	if !nir.hasCall("switch-layout 0") {
 		t.Errorf("expected switch to EN, niri calls: %v", nir.calls)
@@ -385,21 +394,37 @@ func TestDaemonMinWordLenSkipsFragments(t *testing.T) {
 	}
 }
 
-func TestDaemonAnyPrintableSeparatorCompletesWord(t *testing.T) {
+func TestDaemonPunctuationInsideWord(t *testing.T) {
 	rec := &recorder{}
 	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 0)
 
-	// "ghbdtn" closed by ")" (Shift+0): a printable separator completes
-	// the word, the fix replaces only the word — the paren stays.
-	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 11, Value: evdev.ValKeyDown})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 11, Value: evdev.ValKeyUp})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp})
+	// "hs,f" is "рыба" typed with EN active: б sits on the comma key.
+	// The comma joins the buffer, and the whole word fixes at the space.
+	d.typeKeys([]uint16{35, 31, 51, 33}...) // h s , f
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	if !rec.hasCall("wtype -- рыба ") {
+		t.Errorf("hs,f should fix to рыба whole, calls: %v", rec.calls)
+	}
+	exact5 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
+	found := false
+	for _, c := range rec.calls {
+		if c == exact5 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 5 backspaces (hs,f+space), calls: %v", rec.calls)
+	}
 
-	if !rec.hasCall("wtype -- привет") {
-		t.Errorf("closing paren should complete the word, calls: %v", rec.calls)
+	// Real punctuation is protected by the dictionary gate: "hi," flips
+	// to "рш," — not a word, so nothing is injected.
+	d.typeKeys([]uint16{35, 23, 51}...) // h i ,
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	for _, c := range rec.calls {
+		if strings.Contains(c, "рш") {
+			t.Errorf("punctuated non-word must stay untouched, got %q", c)
+		}
 	}
 }
 
@@ -486,33 +511,29 @@ func TestDaemonHeldLetterInvalidatesBuffer(t *testing.T) {
 	}
 }
 
-func TestDaemonSeparatorFlipsLikeTheWord(t *testing.T) {
+func TestDoubleAltFlipsThroughPunctuation(t *testing.T) {
 	rec := &recorder{}
-	nir := &fakeNiri{cur: 0}
+	nir := &fakeNiri{cur: 1} // RU active globally
 	d := newTestDaemon(t, rec, nir, 0)
 	d.cur = layoutRU
+	d.Cfg.Daemon.DoubleAltFlip = true
 
-	// User on RU layout presses Shift+/ (produces ','), meaning the EN
-	// question mark: "руддщ," must become "hello?" — the separator flips
-	// to the other layout along with the word.
+	// User on RU types "руддщ," (Shift+/ gives ','), meaning "hello?".
+	// The double-Alt is an explicit toggle: the whole buffer flips
+	// positionally, punctuation included — ',' on the / key becomes '?'.
 	d.typeKeys(keysRuddsh...)
 	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown})
 	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyDown})
 	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyUp})
 	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp})
+	altTap(d)
+	altTap(d)
 
-	if !rec.hasCall("wtype -- hello?") {
-		t.Errorf("expected comma to flip to ?, calls: %v", rec.calls)
+	if !rec.injType("hello?") {
+		t.Errorf("double-alt should flip the buffer whole (руддщ, → hello?), calls: %v", rec.calls)
 	}
-	exact6 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
-	found := false
-	for _, c := range rec.calls {
-		if c == exact6 {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected 6 backspaces (word+separator), calls: %v", rec.calls)
+	if !nir.hasCall("switch-layout 0") {
+		t.Errorf("layout should follow the flipped word, niri calls: %v", nir.calls)
 	}
 }
 
@@ -703,25 +724,72 @@ func TestLayoutPollSameLayoutKeepsBuffer(t *testing.T) {
 	// must survive it.
 	f.typeKeys(keysMozhet[:2]...)
 	if len(f.buf) != 2 {
-		t.Fatalf("buffer = %q, want 2 chars", string(f.buf))
+		t.Fatalf("buffer = %d presses, want 2", len(f.buf))
 	}
 	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":1}}}`)
 	if len(f.buf) != 2 {
-		t.Fatalf("same-layout poll must keep the buffer, got %q", string(f.buf))
+		t.Fatalf("same-layout poll must keep the buffer, got %d presses", len(f.buf))
 	}
 }
 
-func TestLayoutPollChangedLayoutDropsBuffer(t *testing.T) {
+func TestLayoutChangeKeepsWordAndFixesUnderNewLayout(t *testing.T) {
 	rec := &recorder{}
 	nir := &fakeNiri{cur: 1}
-	f := newTestDaemon(t, rec, nir, 300)
+	f := newTestDaemon(t, rec, nir, 0)
 	f.Cfg.Daemon.RememberWindowLayout = false
-	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1})
+	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 1}) // RU believed
 
-	f.typeKeys(keysMozhet[:2]...)
+	// The word is typed while the daemon's layout is stale (a missed
+	// switch); the reconciliation lands only mid-test. The presses
+	// survive the change and the word is read under the reconciled
+	// layout: "ghbdtn" is not a word, its flip "привет" is — the fix
+	// fires as if the layout had been right all along.
+	f.typeKeys(keysGhbdtn...)
 	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":0}}}`)
-	if len(f.buf) != 0 {
-		t.Errorf("changed layout must drop the buffer, got %q", string(f.buf))
+	if len(f.buf) != len(keysGhbdtn) {
+		t.Fatalf("layout change must keep the presses, got %d", len(f.buf))
+	}
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	if !rec.hasCall("wtype -- привет ") {
+		t.Errorf("word typed across a layout change must still fix, calls: %v", rec.calls)
+	}
+}
+
+func TestLayoutChangeMidWordGarbageStaysUntouched(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	f := newTestDaemon(t, rec, nir, 0)
+	f.Cfg.Daemon.RememberWindowLayout = false
+	f.setLayouts(&niri.KeyboardLayouts{Names: []string{"English (US)", "Russian"}, CurrentIdx: 0}) // EN
+
+	// A word typed across a real mid-word layout switch: the app
+	// receives mixed text, and the pure readings stay gibberish in both
+	// layouts — the dictionary gate must stay silent.
+	f.typeKeys([]uint16{45, 47, 39}...) // x v ; — EN chars in the app
+	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":1}}}`)
+	f.typeKeys([]uint16{26, 49, 23}...) // [ n i — RU chars in the app
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "wtype") {
+			t.Errorf("garbage word must not be fixed, got %q", c)
+		}
+	}
+}
+
+func TestOwnDeviceFilter(t *testing.T) {
+	// The daemon must never read its own virtual keyboard: the injections
+	// would feed back into the word buffer (plan А2).
+	if !ownDevice("lapsus-virtual-keyboard") {
+		t.Error("the lapsus uinput keyboard must be recognized as our own")
+	}
+	if !ownDevice("LAPSUS something") {
+		t.Error("matching is case-insensitive by name substring")
+	}
+	for _, name := range []string{"AT Translated Set 2 keyboard", "TPPS/2 IBM TrackPoint", "Synaptics s3203"} {
+		if ownDevice(name) {
+			t.Errorf("%q must not be treated as our own device", name)
+		}
 	}
 }
 
@@ -897,7 +965,110 @@ func TestDoubleAltFlipsGibberish(t *testing.T) {
 	}
 }
 
+func TestUndoByFixKey(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// The daemon auto-fixes "ghbdtn " → "привет " (and, with
+	// switch_after_words=1 in tests, moves the layout to RU).
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	if !rec.hasCall("wtype -- привет ") {
+		t.Fatalf("the fix must fire first, calls: %v", rec.calls)
+	}
+
+	// The fix key then asks the daemon to revert: the word goes back as
+	// typed, the layout move is taken back, the fix-run resets.
+	if !d.Undo() {
+		t.Fatal("fresh auto-fix must be undoable")
+	}
+	if !rec.hasCall("wtype -- ghbdtn ") {
+		t.Errorf("undo must re-type the word as typed, calls: %v", rec.calls)
+	}
+	exact7 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace"
+	found := false
+	for _, c := range rec.calls {
+		if c == exact7 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("undo must delete the fixed word+space (7), calls: %v", rec.calls)
+	}
+	if !nir.hasCall("switch-layout 1") || !nir.hasCall("switch-layout 0") {
+		t.Errorf("undo must take the fix's layout move back, niri calls: %v", nir.calls)
+	}
+}
+
+func TestUndoRefusesAfterTyping(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	// Text was typed since the fix — the caret may be anywhere.
+	d.typeKeys([]uint16{45}...)
+
+	if d.Undo() {
+		t.Error("undo must be refused once text was typed after the fix")
+	}
+	if rec.hasCall("wtype -- ghbdtn ") {
+		t.Errorf("refused undo must not inject, calls: %v", rec.calls)
+	}
+}
+
+func TestUndoRefusesWhenStale(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+	d.Cfg.Daemon.UndoWindowMs = 30
+
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	time.Sleep(60 * time.Millisecond)
+
+	if d.Undo() {
+		t.Error("undo window must expire")
+	}
+}
+
+func TestUndoRefusesOtherApp(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.mu.Lock()
+	d.appID = "zed" // focus moved to another application
+	d.mu.Unlock()
+
+	if d.Undo() {
+		t.Error("undo must be refused in another application")
+	}
+}
+
+func TestUndoDisabledByConfig(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+	d.Cfg.Daemon.UndoWindowMs = 0
+
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+
+	if d.Undo() {
+		t.Error("undo_window_ms=0 must disable the undo")
+	}
+}
+
 func TestSingletonLock(t *testing.T) {
+	// Isolate from the real daemon's lock: lockSingleton reads
+	// XDG_RUNTIME_DIR at call time (t.Setenv also forbids t.Parallel —
+	// the package uses none).
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	f := newTestDaemon(t, &recorder{}, &fakeNiri{cur: 0}, 300)
 	unlock, err := f.lockSingleton()
 	if err != nil {

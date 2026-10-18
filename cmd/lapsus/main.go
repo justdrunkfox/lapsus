@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +67,7 @@ func usage() {
 Usage:
   lapsus check              self-test: config, dictionaries, analyzer
   lapsus convert <text>     convert text to the other layout (auto direction)
-  lapsus fix [flags]        one-shot: fix the last typed word (bind to an niri hotkey)
+  lapsus fix [flags]        one-shot: fix the last typed word (bind to a niri hotkey)
       -n, --dry-run         report what would happen, change nothing
       -v, --verbose         log each step to stderr
       -s, --selection       fix the current selection (word or phrase)
@@ -74,6 +75,7 @@ Usage:
       -n, --dry-run         log fixes without injecting them
       -v, --verbose         log each step to stderr
       SIGUSR1               toggle pause (pkill -USR1 lapsus)
+  lapsus uinput-probe       debug: type a test word via a virtual keyboard
   lapsus version            print version
 `)
 }
@@ -213,7 +215,7 @@ func (c *daemonCtl) SetFeedback(notify bool, sound string) error {
 	return c.dm.SetFeedback(notify, sound)
 }
 func (c *daemonCtl) RememberLayout() bool            { return c.dm.RememberLayout() }
-func (c *daemonCtl) SetRememberLayout(on bool)       { c.dm.SetRememberLayout(on) }
+func (c *daemonCtl) SetRememberLayout(on bool) error { return c.dm.SetRememberLayout(on) }
 func (c *daemonCtl) DefaultLayout() string           { return c.dm.DefaultLayout() }
 func (c *daemonCtl) SetDefaultLayout(v string) error { return c.dm.SetDefaultLayout(v) }
 func (c *daemonCtl) Quit()                           { c.cancel() }
@@ -251,6 +253,14 @@ func runFixCommand(args []string) {
 		fmt.Fprintln(os.Stderr, "lapsus fix:", err)
 		os.Exit(1)
 	}
+	// The fix key doubles as undo (plan А4): when the daemon still has a
+	// fresh auto-fix, this press reverts it instead of toggling. The
+	// daemon declining (nothing fresh) or not running falls through to
+	// the ordinary toggle. Selection mode never undoes — it is about the
+	// explicit selection, not the word just fixed.
+	if !selection && undoRequestedByDaemon() {
+		return
+	}
 	// No dictionaries here on purpose: the hotkey is an unconditional
 	// toggle, which keeps the spawn fast.
 	fixer := &fix.Fixer{
@@ -270,6 +280,34 @@ func runFixCommand(args []string) {
 	}
 	fmt.Fprintln(os.Stderr, "lapsus fix:", err)
 	os.Exit(1)
+}
+
+// undoRequestedByDaemon asks the running daemon to revert its last
+// auto-fix. ok=true means the daemon handled the press (the word was
+// restored) and the toggle must not run; a missing daemon, a timeout or
+// a refusal falls through to the ordinary fix.
+func undoRequestedByDaemon() bool {
+	conn, err := net.DialTimeout("unix", undoSocketPath(), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	if _, err := conn.Write([]byte("undo\n")); err != nil {
+		return false
+	}
+	buf := make([]byte, 8)
+	n, err := conn.Read(buf)
+	return err == nil && strings.TrimSpace(string(buf[:n])) == "ok"
+}
+
+// undoSocketPath mirrors the daemon's socket location.
+func undoSocketPath() string {
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, "lapsus.daemon.sock")
 }
 
 func runCheck() error {
