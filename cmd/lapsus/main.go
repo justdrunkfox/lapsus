@@ -71,6 +71,7 @@ Usage:
       -n, --dry-run         report what would happen, change nothing
       -v, --verbose         log each step to stderr
       -s, --selection       fix the current selection (word or phrase)
+      -t, --tail            flip the words just typed (daemon memory, no selection)
   lapsus daemon [flags]     auto-fix: watch keystrokes, fix at word boundaries
       -n, --dry-run         log fixes without injecting them
       -v, --verbose         log each step to stderr
@@ -234,18 +235,30 @@ func lapsusConfigPath() string {
 // was typed in the wrong layout.
 func runFixCommand(args []string) {
 	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
-	var dryRun, verbose, selection bool
+	var dryRun, verbose, selection, tail bool
 	fs.BoolVar(&dryRun, "dry-run", false, "report what would happen, change nothing")
 	fs.BoolVar(&dryRun, "n", false, "shorthand for --dry-run")
 	fs.BoolVar(&verbose, "v", false, "log each step to stderr")
 	fs.BoolVar(&selection, "selection", false, "fix the current selection (word or phrase) instead of the word at the caret")
 	fs.BoolVar(&selection, "s", false, "shorthand for --selection")
+	fs.BoolVar(&tail, "tail", false, "flip the words just typed (daemon phrase memory, no selection)")
+	fs.BoolVar(&tail, "t", false, "shorthand for --tail")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "lapsus fix: unexpected argument %q\n", fs.Arg(0))
 		os.Exit(2)
+	}
+
+	// The tail hotkey lives entirely in the daemon: the phrase memory is
+	// there (plan Б2).
+	if tail {
+		if daemonRequest("tail") {
+			return
+		}
+		fmt.Fprintln(os.Stderr, "lapsus fix: демон не запущен — --tail берёт слова из его памяти")
+		os.Exit(1)
 	}
 
 	cfg, err := loadConfig()
@@ -258,7 +271,7 @@ func runFixCommand(args []string) {
 	// daemon declining (nothing fresh) or not running falls through to
 	// the ordinary toggle. Selection mode never undoes — it is about the
 	// explicit selection, not the word just fixed.
-	if !selection && undoRequestedByDaemon() {
+	if !selection && !tail && undoRequestedByDaemon() {
 		return
 	}
 	// No dictionaries here on purpose: the hotkey is an unconditional
@@ -287,13 +300,19 @@ func runFixCommand(args []string) {
 // restored) and the toggle must not run; a missing daemon, a timeout or
 // a refusal falls through to the ordinary fix.
 func undoRequestedByDaemon() bool {
+	return daemonRequest("undo")
+}
+
+// daemonRequest sends one command over the daemon socket and reports
+// whether the daemon accepted and handled it.
+func daemonRequest(cmd string) bool {
 	conn, err := net.DialTimeout("unix", undoSocketPath(), 300*time.Millisecond)
 	if err != nil {
 		return false
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(time.Second))
-	if _, err := conn.Write([]byte("undo\n")); err != nil {
+	if _, err := conn.Write([]byte(cmd + "\n")); err != nil {
 		return false
 	}
 	buf := make([]byte, 8)

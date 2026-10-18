@@ -62,6 +62,7 @@ binds {
 
 - **`lapsus fix`** — flips the word left of the caret, then switches the layout to the fixed word's language. In GUI apps the selection is grown across the application's word units, so words containing `, . ; ' [ ]` — the letters `б ж э ю х ъ` on ЙЦУКЕН — flip whole; the press that crosses into the previous word is undone. If the daemon just auto-fixed a word (within `daemon.undo_window_ms`, with nothing typed since), the same key **reverts that fix** instead: the word goes back as typed and the fix's layout move is taken back — press once more to toggle as usual.
 - **`lapsus fix --selection`** — flips the current selection (mouse or Shift+arrows); a phrase is flipped word by word with whitespace preserved.
+- **`lapsus fix --tail`** — flips the words just typed, from the daemon's phrase memory (words since the last Enter/arrows/combo, up to 32). No selection, no clipboard — the same in GUI apps and terminals. Words the auto-fix already corrected stay as they are; only the missed ones flip. Bind it to its own key, e.g. `Ctrl+XF86WakeUp { spawn "lapsus" "fix" "--tail"; }`.
 - Debugging: `lapsus fix -v` (step log), `lapsus fix -n` (dry run).
 
 ## The daemon

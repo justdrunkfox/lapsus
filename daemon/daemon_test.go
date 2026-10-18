@@ -1064,6 +1064,116 @@ func TestUndoDisabledByConfig(t *testing.T) {
 	}
 }
 
+func TestFixTailFlipsUnfixedKeepsFixed(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// "ghbdtn" is auto-fixed to "привет"; the gibberish word is not a
+	// word in either layout and stays as typed. The tail flip must keep
+	// the fixed word and flip only the missed one.
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.typeKeys([]uint16{45, 47, 39, 26, 49, 23}...) // xv;[ni
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+
+	if !d.FixTail() {
+		t.Fatal("the missed word must be flippable")
+	}
+	if !rec.injType("привет чмжхтш ") {
+		t.Errorf("expected the tail flip to keep fixed word and flip missed one, calls: %v", rec.calls)
+	}
+	exact14 := "wtype -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace" +
+		" -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace -k BackSpace" +
+		" -k BackSpace -k BackSpace"
+	found := false
+	for _, c := range rec.calls {
+		if c == exact14 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected exactly 14 backspaces (привет+xv;[ni+2 spaces), calls: %v", rec.calls)
+	}
+	// The tail rewrote the text the undo refers to.
+	if d.Undo() {
+		t.Error("undo must not fire after the tail was rewritten")
+	}
+	// The flip is idempotent: the tail is already in its intended reading.
+	if d.FixTail() {
+		t.Error("second tail press must be a no-op")
+	}
+	if rec.injType("привет xv;[ni ") {
+		t.Errorf("second tail press must not inject, calls: %v", rec.calls)
+	}
+}
+
+func TestFixTailNothingWhenAllFixed(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// Both words were auto-fixed already: their flips read the same as
+	// the text — there is nothing to do.
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.typeKeys(keysVbh...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	before := len(rec.calls)
+
+	if d.FixTail() {
+		t.Error("fully fixed tail has nothing to flip")
+	}
+	if len(rec.calls) != before {
+		t.Errorf("no injection expected, calls: %v", rec.calls)
+	}
+}
+
+func TestFixTailEnterClearsTail(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// Enter commits the first phrase: the tail must hold only the words
+	// typed after it.
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyEnter, Value: evdev.ValKeyDown})
+	d.typeKeys([]uint16{45, 47, 39, 26, 49, 23}...) // xv;[ni
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+
+	if !d.FixTail() {
+		t.Fatal("the post-Enter word must be flippable")
+	}
+	if !rec.injType("чмжхтш ") {
+		t.Errorf("expected the tail to flip only the post-Enter word, calls: %v", rec.calls)
+	}
+	// Nothing typed since the last boundary: nothing to flip.
+	empty := newTestDaemon(t, &recorder{}, &fakeNiri{cur: 0}, 0)
+	if empty.FixTail() {
+		t.Error("empty tail has nothing to flip")
+	}
+}
+
+func TestFixTailAfterUndoFlipsTyped(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// Fix, then undo by the fix key: the tail must follow the revert,
+	// and the tail flip then re-flips the typed word.
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	if !d.Undo() {
+		t.Fatal("fresh fix must be undoable")
+	}
+	if !d.FixTail() {
+		t.Fatal("the reverted word must be flippable from the tail")
+	}
+	if !rec.injType("привет ") {
+		t.Errorf("expected the typed word to be flipped, calls: %v", rec.calls)
+	}
+}
 func TestSingletonLock(t *testing.T) {
 	// Isolate from the real daemon's lock: lockSingleton reads
 	// XDG_RUNTIME_DIR at call time (t.Setenv also forbids t.Parallel —

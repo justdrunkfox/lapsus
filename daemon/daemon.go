@@ -83,6 +83,20 @@ type keyPress struct {
 	shift bool
 }
 
+// tailWord is one completed word in the daemon's phrase memory (plan
+// Б2): what the application received, and the presses that produced it,
+// so the tail can be flipped without selection or clipboard.
+type tailWord struct {
+	appText    string
+	presses    []keyPress
+	cur        layout.Layout
+	spaceAfter bool // a space follows this word in the application
+}
+
+// tailCap bounds the phrase memory: words since the last hard boundary
+// (Enter, arrows, combos all clear it) never reach this many.
+const tailCap = 32
+
 type Daemon struct {
 	Cfg     *config.Config
 	Ana     *analyze.Analyzer
@@ -105,11 +119,12 @@ type Daemon struct {
 	devices    map[string]bool
 	appLayouts map[string]layout.Layout // app_id → last typed layout
 	// modifier and double-Alt-tap state
-	ctrlHeld   bool
-	altHeld    bool
-	altTapWait bool
-	altDouble  bool
-	altLastUp  time.Time
+	ctrlHeld    bool
+	altHeld     bool
+	leftAltHeld bool
+	altTapWait  bool
+	altDouble   bool
+	altLastUp   time.Time
 	// fix-run tracking: consecutive fixes to the same language move the
 	// layout once the run reaches switch_after_words.
 	fixRunLang  layout.Layout
@@ -123,11 +138,14 @@ type Daemon struct {
 	undo       undoRecord
 	hasUndo    bool
 	lastAction time.Time
-	timer      *time.Timer
-	cur        layout.Layout
-	appID      string
-	paused     bool
-	warned     bool
+	// tail is the phrase memory: completed words since the last hard
+	// boundary, oldest first (plan Б2).
+	tail   []tailWord
+	timer  *time.Timer
+	cur    layout.Layout
+	appID  string
+	paused bool
+	warned bool
 }
 
 // New builds a Daemon; Run blocks until its context is cancelled.
@@ -341,7 +359,8 @@ func (d *Daemon) handleStreamEvent(line string) {
 			d.mu.Lock()
 			if win.AppIDOr("") != d.appID {
 				d.appID = win.AppIDOr("")
-				d.clearBuf() // the half-typed word belongs to the old window
+				d.clearBuf()  // the half-typed word belongs to the old window
+				d.clearTail() // so does the phrase tail
 			}
 			d.mu.Unlock()
 		}
@@ -425,8 +444,9 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		// kernel-generated repeats that cannot be counted from evdev,
 		// so the buffer length is no longer trustworthy — and a fix
 		// with a wrong length would delete unrelated text. Drop the
-		// word; tracking resumes with the next one.
+		// word and the phrase tail; tracking resumes with the next one.
 		d.clearBuf()
+		d.clearTail()
 		return
 	}
 
@@ -447,21 +467,26 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	case evdev.KeyLeftAlt:
 		if ev.Value == evdev.ValKeyDown {
 			d.altHeld = true
+			d.leftAltHeld = true
 			if d.Cfg.Daemon.DoubleAltFlip {
 				d.altDown()
 			} else {
 				d.clearBuf() // trigger off: an Alt press is a combo start
+				d.clearTail()
 			}
 		} else if ev.Value == evdev.ValKeyUp {
 			d.altHeld = false
+			d.leftAltHeld = false
 			if d.Cfg.Daemon.DoubleAltFlip {
 				d.altUp()
 			}
 		}
 		return
 	case evdev.KeyRightAlt:
-		// Right Alt belongs to the compositor hotkey (Multi_key);
-		// the daemon only tracks its held state.
+		// Right Alt belongs to the compositor hotkey (the fix key /
+		// Compose); the daemon only tracks its held state. It must not
+		// clear the phrase tail: the key is the user's flip habit, and
+		// presses of it happen all the time around the tail.
 		if ev.Value == evdev.ValKeyDown {
 			d.altHeld = true
 		} else if ev.Value == evdev.ValKeyUp {
@@ -483,8 +508,13 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	}
 	if d.ctrlHeld || d.altHeld {
 		// A combo is in progress (Alt+letter, Alt+Enter...): drop the
-		// word, it is not going to end in a fixable way.
+		// word, it is not going to end in a fixable way. The tail
+		// survives a lone right-Alt hold (the fix key / Compose) but not
+		// Ctrl or left-Alt combos.
 		d.clearBuf()
+		if d.ctrlHeld || d.leftAltHeld {
+			d.clearTail()
+		}
 		return
 	}
 	if ev.Value != evdev.ValKeyDown {
@@ -498,6 +528,10 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 	case evdev.KeyBackspace:
 		if len(d.buf) > 0 {
 			d.buf = d.buf[:len(d.buf)-1]
+		} else {
+			// Deleting into already-completed words: the presses no
+			// longer match the text, the tail cannot be trusted.
+			d.clearTail()
 		}
 		return
 	case evdev.KeyDelete, evdev.KeyEnter, evdev.KeyTab, evdev.KeyEsc,
@@ -506,12 +540,14 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		// The word ends in a way that is not safe to fix after: text may
 		// be committed (enter), completed (tab) or the caret moved.
 		d.clearBuf()
+		d.clearTail()
 		return
 	}
 
 	ch, ok := keymap.CharFor(ev.Code, d.shift, d.cur)
 	if !ok {
 		d.clearBuf() // F-keys, numpad, media keys, anything untranslatable
+		d.clearTail()
 		return
 	}
 	// Deliberately without the character: -v goes to journald, and the
@@ -584,9 +620,15 @@ func (d *Daemon) armPauseTimer() {
 // separator that completed the word — always a space (0 for the pause
 // boundary): it has already reached the application and sits between the
 // word and the caret, so the fix must delete and re-type it as well.
-// Caller must hold d.mu.
+// The completed word goes into the phrase memory (the tail). Caller must
+// hold d.mu.
 func (d *Daemon) finishWord(sep rune) {
 	if len(d.buf) == 0 {
+		// A space with nothing buffered still lands in the text: it
+		// belongs to the newest tail word.
+		if sep == ' ' {
+			d.noteSpace()
+		}
 		return
 	}
 	presses := d.buf
@@ -597,21 +639,55 @@ func (d *Daemon) finishWord(sep rune) {
 	} else {
 		d.logf("word %q complete (pause)", word)
 	}
-	d.maybeFix(presses, word, sep)
+	entry := tailWord{presses: presses, cur: d.cur, spaceAfter: sep == ' '}
+	if fixed, ok := d.maybeFix(presses, word, sep); ok {
+		// The application received the corrected text; maybeFix reports
+		// it with the separator, the entry stores the bare word.
+		entry.appText = strings.TrimSuffix(fixed, string(sep))
+	} else {
+		entry.appText = word
+	}
+	d.pushTail(entry)
+}
+
+// noteSpace marks a space typed with an empty buffer: it sits after the
+// newest tail word (the pause boundary may have completed it earlier
+// without one).
+func (d *Daemon) noteSpace() {
+	if n := len(d.tail); n > 0 {
+		d.tail[n-1].spaceAfter = true
+	}
+}
+
+// pushTail appends a completed word to the phrase memory.
+func (d *Daemon) pushTail(w tailWord) {
+	d.tail = append(d.tail, w)
+	if len(d.tail) > tailCap {
+		d.tail = d.tail[len(d.tail)-tailCap:]
+	}
+}
+
+// clearTail drops the phrase memory: something happened that makes the
+// tail's replacement unreliable (hard boundary, combo, autorepeat,
+// focus moved). Caller must hold d.mu.
+func (d *Daemon) clearTail() {
+	d.tail = nil
 }
 
 // maybeFix decides whether the word must be corrected and injects the
 // fix. word is the reading of presses under the layout believed active —
 // the text the application received when d.cur is right, which the
-// dictionaries then judge exactly like before. Caller must hold d.mu.
-func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) {
+// dictionaries then judge exactly like before. The returned corrected
+// text is what the application holds now (ok=false when nothing was
+// injected). Caller must hold d.mu.
+func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) (string, bool) {
 	if d.paused {
 		d.logf("paused, skipping %q", word)
-		return
+		return "", false
 	}
 	if niri.AppIDIn(d.appID, d.Cfg.Daemon.ExcludeAppIDs) {
 		d.logf("app %q excluded, skipping %q", d.appID, word)
-		return
+		return "", false
 	}
 	// Short words are risky to fix automatically: a mid-word pause can
 	// split a word into fragments, and single letters map to real
@@ -619,17 +695,17 @@ func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) {
 	// no such limit — there the intent is explicit.
 	if utf8.RuneCountInString(word) < d.Cfg.Daemon.MinWordLen {
 		d.logf("word %q shorter than min_word_len=%d, skipping", word, d.Cfg.Daemon.MinWordLen)
-		return
+		return "", false
 	}
 	corrected, needsFix := d.Ana.Analyze(word, d.cur)
 	if !needsFix {
 		d.resetFixRun()
 		d.logf("no fix needed for %q", word)
-		return
+		return "", false
 	}
 	if d.DryRun {
 		d.logf("dry run: would replace %q with %q", word, corrected)
-		return
+		return "", false
 	}
 	// The space sits between the word and the caret: delete it with the
 	// word and type it back after the fix, verbatim — the space is the
@@ -643,7 +719,7 @@ func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) {
 	}
 	if err := d.Inj.ReplaceWord(old, fixed); err != nil {
 		d.logf("inject failed: %v", err)
-		return
+		return "", false
 	}
 	d.logf("fixed %q → %q", word, corrected)
 	// The fix key can revert this while it is fresh (plan А4): remember
@@ -674,6 +750,50 @@ func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) {
 			}
 		}
 	}
+	return fixed, true
+}
+
+// FixTail flips the words just typed — the daemon's phrase memory (plan
+// Б2 hotkey) — to their other-layout readings. The replacement goes
+// through the injector (BackSpace ×N + retype), no selection, no
+// clipboard, the same in GUI apps and terminals. Words the auto-fix
+// already corrected read the same under the other layout and stay in
+// place, so a partially fixed phrase gets only its missed words
+// flipped. ok=false when there is nothing to flip.
+func (d *Daemon) FixTail() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.tail) == 0 {
+		return false
+	}
+	var oldB, newB strings.Builder
+	changed := false
+	for i, w := range d.tail {
+		flip := d.reading(w.presses, layout.Other(w.cur))
+		d.tail[i].appText = flip
+		if flip != w.appText {
+			changed = true
+		}
+		oldB.WriteString(w.appText)
+		newB.WriteString(flip)
+		if w.spaceAfter {
+			oldB.WriteString(" ")
+			newB.WriteString(" ")
+		}
+	}
+	if !changed {
+		return false
+	}
+	// The state the undo reverts is being rewritten.
+	d.hasUndo = false
+	if err := d.Inj.ReplaceWord(oldB.String(), newB.String()); err != nil {
+		d.logf("tail inject failed: %v", err)
+		return false
+	}
+	d.logf("tail: %q → %q", oldB.String(), newB.String())
+	// Off the input path (see maybeFix).
+	go d.FB.Fire(oldB.String(), newB.String())
+	return true
 }
 
 // learnAppLayout remembers the focused application's language at the
@@ -722,6 +842,11 @@ func (d *Daemon) Undo() bool {
 		if _, err := d.Niri.SwitchToLayoutOf(rec.old); err != nil {
 			d.logf("undo layout switch failed: %v", err)
 		}
+	}
+	// The phrase memory holds the fixed text (bare word); after the
+	// revert it holds what was typed again.
+	if n := len(d.tail); n > 0 && d.tail[n-1].appText == strings.TrimSuffix(rec.fixed, " ") {
+		d.tail[n-1].appText = strings.TrimSuffix(rec.old, " ")
 	}
 	d.logf("undo: %q → %q", rec.fixed, rec.old)
 	d.FB.Fire(rec.fixed, rec.old)
@@ -778,12 +903,22 @@ func (d *Daemon) handleUndoConn(conn net.Conn) {
 	buf := make([]byte, 64)
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	n, err := conn.Read(buf)
-	if err != nil || strings.TrimSpace(string(buf[:n])) != "undo" {
+	cmd := strings.TrimSpace(string(buf[:n]))
+	if err != nil {
 		return
 	}
 	reply := "no\n"
-	if d.Undo() {
-		reply = "ok\n"
+	switch cmd {
+	case "undo":
+		if d.Undo() {
+			reply = "ok\n"
+		}
+	case "tail":
+		if d.FixTail() {
+			reply = "ok\n"
+		}
+	default:
+		return
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
 	_, _ = conn.Write([]byte(reply))
