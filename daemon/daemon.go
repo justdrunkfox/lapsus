@@ -138,6 +138,12 @@ type Daemon struct {
 	undo       undoRecord
 	hasUndo    bool
 	lastAction time.Time
+	// lastInjectEnd is when the last injection finished. Presses whose
+	// kernel timestamp predates it were physically typed while the
+	// injection was in flight — they may sit anywhere inside the
+	// re-typed text, so the word they belong to is dropped (the
+	// typing-during-injection race guard, plan А2).
+	lastInjectEnd time.Time
 	// tail is the phrase memory: completed words since the last hard
 	// boundary, oldest first (plan Б2).
 	tail   []tailWord
@@ -523,6 +529,15 @@ func (d *Daemon) handleEvent(ev evdev.Event) {
 		// repeats, so counting them would desync the buffer.
 		return
 	}
+	if ev.Time.Before(d.lastInjectEnd) {
+		// Typed while an injection was in flight (the event sat in the
+		// kernel queue): its place in the re-typed text is unknown, so
+		// the word it belongs to must not be fixed or flipped.
+		d.logf("press during injection dropped")
+		d.clearBuf()
+		d.clearTail()
+		return
+	}
 
 	switch ev.Code {
 	case evdev.KeyBackspace:
@@ -674,6 +689,17 @@ func (d *Daemon) clearTail() {
 	d.tail = nil
 }
 
+// inject wraps every text replacement: on success it records when the
+// injection finished, which arms the typing-during-injection race guard
+// (see handleEvent).
+func (d *Daemon) inject(old, fixed string) error {
+	err := d.Inj.ReplaceWord(old, fixed)
+	if err == nil {
+		d.lastInjectEnd = time.Now()
+	}
+	return err
+}
+
 // maybeFix decides whether the word must be corrected and injects the
 // fix. word is the reading of presses under the layout believed active —
 // the text the application received when d.cur is right, which the
@@ -717,7 +743,7 @@ func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) (string, bo
 		old += string(sep)
 		fixed += string(sep)
 	}
-	if err := d.Inj.ReplaceWord(old, fixed); err != nil {
+	if err := d.inject(old, fixed); err != nil {
 		d.logf("inject failed: %v", err)
 		return "", false
 	}
@@ -734,20 +760,37 @@ func (d *Daemon) maybeFix(presses []keyPress, word string, sep rune) (string, bo
 		// episode: once it reaches the threshold, move the layout so the
 		// remaining words type correctly. A single fixed word does not
 		// yank the layout; a real word or a layout change resets the run.
-		target := analyze.GuessLayout(corrected)
-		if d.fixRunLang != target {
-			d.fixRunLang, d.fixRunCount = target, 0
+		// Exception (plan А4): a word real in both dictionaries whose
+		// flipped reading scores switch_confidence_k times higher is an
+		// unambiguous episode on an ambiguous word — it switches at
+		// once. Off by default until a replay corpus backs the
+		// threshold.
+		immediate := false
+		if k := d.Cfg.Daemon.SwitchConfidenceK; k > 0 {
+			mapped, orig := d.Ana.Confidence(word, d.cur)
+			if orig > 0 && mapped >= k*orig {
+				immediate = true
+			}
 		}
-		d.fixRunCount++
-		if d.fixRunCount >= d.Cfg.Daemon.SwitchAfterWords {
+		if immediate {
 			d.resetFixRun()
-			switched, err := d.Niri.SwitchToLayoutOf(corrected)
-			if err != nil {
-				d.logf("cannot switch layout: %v", err)
+		} else {
+			target := analyze.GuessLayout(corrected)
+			if d.fixRunLang != target {
+				d.fixRunLang, d.fixRunCount = target, 0
 			}
-			if switched && d.hasUndo {
-				d.undo.switched = true // the undo takes the move back
+			d.fixRunCount++
+			if d.fixRunCount < d.Cfg.Daemon.SwitchAfterWords {
+				return fixed, true
 			}
+			d.resetFixRun()
+		}
+		switched, err := d.Niri.SwitchToLayoutOf(corrected)
+		if err != nil {
+			d.logf("cannot switch layout: %v", err)
+		}
+		if switched && d.hasUndo {
+			d.undo.switched = true // the undo takes the move back
 		}
 	}
 	return fixed, true
@@ -786,7 +829,7 @@ func (d *Daemon) FixTail() bool {
 	}
 	// The state the undo reverts is being rewritten.
 	d.hasUndo = false
-	if err := d.Inj.ReplaceWord(oldB.String(), newB.String()); err != nil {
+	if err := d.inject(oldB.String(), newB.String()); err != nil {
 		d.logf("tail inject failed: %v", err)
 		return false
 	}
@@ -833,7 +876,7 @@ func (d *Daemon) Undo() bool {
 	}
 	rec := d.undo
 	d.hasUndo = false
-	if err := d.Inj.ReplaceWord(rec.fixed, rec.old); err != nil {
+	if err := d.inject(rec.fixed, rec.old); err != nil {
 		d.logf("undo inject failed: %v", err)
 		return false
 	}
@@ -980,7 +1023,7 @@ func (d *Daemon) flipBufferWord() {
 		d.logf("double-alt: %q maps to itself, nothing to flip", typed)
 		return
 	}
-	if err := d.Inj.ReplaceWord(typed, flipped); err != nil {
+	if err := d.inject(typed, flipped); err != nil {
 		d.logf("double-alt inject failed: %v", err)
 		return
 	}

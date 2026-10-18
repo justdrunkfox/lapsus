@@ -69,3 +69,15 @@ func (a *Analyzer) Analyze(word string, currentLayout layout.Layout) (corrected 
 
 	return word, false
 }
+
+// Confidence reports the dictionary evidence behind a potential fix:
+// mapped is the frequency of the flipped reading, orig of the word as
+// typed, both under their own layout dictionaries. A large ratio at a
+// non-zero orig marks an ambiguous word (real in both layouts) whose
+// flipped reading is overwhelmingly more frequent — the switch policy
+// may act on it immediately instead of counting runs.
+func (a *Analyzer) Confidence(word string, currentLayout layout.Layout) (mapped, orig int) {
+	other := layout.Other(currentLayout)
+	flipped := layout.Map(word, currentLayout, other)
+	return a.dict.Score(flipped, other), a.dict.Score(word, currentLayout)
+}

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,8 +128,8 @@ func newTestDaemon(t *testing.T, rec *recorder, nir *fakeNiri, pauseMs int) *Dae
 
 func (d *Daemon) typeKeys(codes ...uint16) {
 	for _, c := range codes {
-		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyDown})
-		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyUp})
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyDown, Time: time.Now()})
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyUp, Time: time.Now()})
 	}
 }
 
@@ -155,7 +156,7 @@ func TestDaemonFixesENWordTypedInENLayout(t *testing.T) {
 
 	// User types "ghbdtn " while EN is active (meant Russian).
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !rec.hasCall("wtype -- привет") {
 		t.Errorf("expected the corrected word to be typed, calls: %v", rec.calls)
@@ -189,7 +190,7 @@ func TestDaemonFixesRUWordTypedInRULayout(t *testing.T) {
 
 	// "руддщ" typed while RU is active (meant English), closed by space.
 	d.typeKeys(keysRuddsh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !rec.hasCall("wtype -- hello ") {
 		t.Errorf("expected the corrected word with the space restored, calls: %v", rec.calls)
@@ -206,7 +207,7 @@ func TestDaemonNoFixForRealWords(t *testing.T) {
 
 	// "hello" typed in EN — a real word, nothing to fix.
 	d.typeKeys(keysHello...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if len(rec.calls) != 0 {
 		t.Errorf("nothing should be injected for a real word, calls: %v", rec.calls)
@@ -218,15 +219,15 @@ func TestDaemonPreservesCase(t *testing.T) {
 	nir := &fakeNiri{cur: 0}
 	d := newTestDaemon(t, rec, nir, 300)
 
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 34, Value: evdev.ValKeyDown}) // Shift+g
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 34, Value: evdev.ValKeyUp})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown, Time: time.Now()})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 34, Value: evdev.ValKeyDown, Time: time.Now()}) // Shift+g
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 34, Value: evdev.ValKeyUp, Time: time.Now()})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp, Time: time.Now()})
 	for _, c := range keysGhbdtn[1:] {
-		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyDown})
-		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyUp})
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyDown, Time: time.Now()})
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyUp, Time: time.Now()})
 	}
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !rec.hasCall("wtype -- Привет") {
 		t.Errorf("expected case-preserving fix, calls: %v", rec.calls)
@@ -239,7 +240,7 @@ func TestDaemonEnterClearsWithoutFix(t *testing.T) {
 	d := newTestDaemon(t, rec, nir, 300)
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyEnter, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyEnter, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if len(rec.calls) != 0 || nir.hasCall("switch-layout") {
 		t.Errorf("enter must clear the buffer without fixing, calls: %v / %v", rec.calls, nir.calls)
@@ -253,12 +254,12 @@ func TestDaemonCtrlComboClearsBuffer(t *testing.T) {
 
 	d.typeKeys(keysGhbdtn[:3]...)
 	// Ctrl+C style shortcut in the middle.
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftCtrl, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftCtrl, Value: evdev.ValKeyDown, Time: time.Now()})
 	d.typeKeys([]uint16{46}...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftCtrl, Value: evdev.ValKeyUp})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftCtrl, Value: evdev.ValKeyUp, Time: time.Now()})
 	// Garbage after the shortcut: not a word in either dictionary.
 	d.typeKeys([]uint16{45, 27, 17, 19, 23, 50}...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	for _, c := range rec.calls {
 		if strings.HasPrefix(c, "wtype") {
@@ -276,8 +277,8 @@ func TestDaemonBackspaceShrinksWord(t *testing.T) {
 	// "руддщ", then BackSpace, then space: buffer becomes "рудд" → "hell"
 	// is a known EN word → fix fires with 4 backspaces.
 	d.typeKeys(keysRuddsh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyDown})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyDown, Time: time.Now()})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !rec.hasCall("wtype -- hell") {
 		t.Errorf("expected the shortened word to be fixed, calls: %v", rec.calls)
@@ -317,7 +318,7 @@ func TestDaemonPausedSkipsFix(t *testing.T) {
 	d.TogglePause()
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if len(rec.calls) != 0 {
 		t.Errorf("paused daemon must not inject, calls: %v", rec.calls)
@@ -332,7 +333,7 @@ func TestDaemonExcludedApp(t *testing.T) {
 	d.appID = "mygame" // case-insensitive match
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if len(rec.calls) != 0 {
 		t.Errorf("excluded app must not be fixed, calls: %v", rec.calls)
@@ -354,7 +355,7 @@ func TestDaemonStreamEventsUpdateLayout(t *testing.T) {
 
 	// A wrong-layout word typed in RU now fixes to EN.
 	d.typeKeys(keysRuddsh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	if !rec.hasCall("wtype -- hello") {
 		t.Errorf("expected RU→EN fix after layout tracking, calls: %v", rec.calls)
 	}
@@ -367,7 +368,7 @@ func TestDaemonDryRunInjectsNothing(t *testing.T) {
 	d.DryRun = true
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	for _, c := range rec.calls {
 		if strings.HasPrefix(c, "wtype") {
@@ -385,7 +386,7 @@ func TestDaemonMinWordLenSkipsFragments(t *testing.T) {
 	// the daemon must not touch it (e.g. it is a fragment of a word
 	// split by a mid-word pause).
 	d.typeKeys([]uint16{36, 33}...) // k, f
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	for _, c := range rec.calls {
 		if strings.HasPrefix(c, "wtype") {
@@ -402,7 +403,7 @@ func TestDaemonPunctuationInsideWord(t *testing.T) {
 	// "hs,f" is "рыба" typed with EN active: б sits on the comma key.
 	// The comma joins the buffer, and the whole word fixes at the space.
 	d.typeKeys([]uint16{35, 31, 51, 33}...) // h s , f
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	if !rec.hasCall("wtype -- рыба ") {
 		t.Errorf("hs,f should fix to рыба whole, calls: %v", rec.calls)
 	}
@@ -420,7 +421,7 @@ func TestDaemonPunctuationInsideWord(t *testing.T) {
 	// Real punctuation is protected by the dictionary gate: "hi," flips
 	// to "рш," — not a word, so nothing is injected.
 	d.typeKeys([]uint16{35, 23, 51}...) // h i ,
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	for _, c := range rec.calls {
 		if strings.Contains(c, "рш") {
 			t.Errorf("punctuated non-word must stay untouched, got %q", c)
@@ -444,7 +445,7 @@ func TestDaemonPauseBoundaryDisabledByDefault(t *testing.T) {
 	}
 
 	// The word survives the pause: a space completes the WHOLE word.
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	if !rec.hasCall("wtype -- привет") {
 		t.Errorf("word typed across pauses must still be fixed whole, calls: %v", rec.calls)
 	}
@@ -459,16 +460,16 @@ func TestDaemonHeldBackspaceInvalidatesBuffer(t *testing.T) {
 	// "руддщ", then a HELD backspace: one press plus kernel repeats the
 	// app also acts on. The daemon cannot know how much was deleted.
 	d.typeKeys(keysRuddsh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyDown, Time: time.Now()})
 	for i := 0; i < 5; i++ {
-		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyRepeat})
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyRepeat, Time: time.Now()})
 	}
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyUp})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyBackspace, Value: evdev.ValKeyUp, Time: time.Now()})
 
 	// User retypes a word and hits space. The fix must use the length of
 	// the word tracked AFTER the hold (5), not a mix with stale content.
 	d.typeKeys(keysRuddsh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !rec.hasCall("wtype -- hello") {
 		t.Errorf("expected the retyped word to be fixed, calls: %v", rec.calls)
@@ -496,14 +497,14 @@ func TestDaemonHeldLetterInvalidatesBuffer(t *testing.T) {
 
 	// "рудд" + HELD key (app gets "руддооо", daemon can only see "руддо").
 	d.typeKeys(keysRuddsh[:4]...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyDown, Time: time.Now()})
 	for i := 0; i < 4; i++ {
-		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyRepeat})
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyRepeat, Time: time.Now()})
 	}
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyUp})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 24, Value: evdev.ValKeyUp, Time: time.Now()})
 
 	// Buffer was invalidated by the hold: the fragment must not be fixed.
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	for _, c := range rec.calls {
 		if strings.HasPrefix(c, "wtype") {
 			t.Errorf("held-key fragment must not be fixed, got %q", c)
@@ -522,10 +523,10 @@ func TestDoubleAltFlipsThroughPunctuation(t *testing.T) {
 	// The double-Alt is an explicit toggle: the whole buffer flips
 	// positionally, punctuation included — ',' on the / key becomes '?'.
 	d.typeKeys(keysRuddsh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyDown})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyUp})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyDown, Time: time.Now()})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyDown, Time: time.Now()})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 53, Value: evdev.ValKeyUp, Time: time.Now()})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftShift, Value: evdev.ValKeyUp, Time: time.Now()})
 	altTap(d)
 	altTap(d)
 
@@ -544,7 +545,7 @@ func TestDaemonDoesNotSwitchLayoutByDefault(t *testing.T) {
 	d.Cfg.Daemon.SwitchLayout = false // project default: daemon leaves the layout alone
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !rec.hasCall("wtype -- привет ") {
 		t.Errorf("the word must still be fixed, calls: %v", rec.calls)
@@ -658,7 +659,7 @@ func TestSwitchLayoutAfterTwoConsecutiveFixes(t *testing.T) {
 
 	// First wrong-layout word: fixed, layout not moved yet.
 	f.typeKeys(keysGhbdtn...)
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	for _, c := range nir.calls {
 		if strings.Contains(c, "switch-layout") {
 			t.Errorf("single fixed word must not move the layout, calls: %v", nir.calls)
@@ -667,7 +668,7 @@ func TestSwitchLayoutAfterTwoConsecutiveFixes(t *testing.T) {
 
 	// Second consecutive fix to RU: the layout follows.
 	f.typeKeys(keysVbh...)
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	if !nir.hasCall("switch-layout 1") {
 		t.Errorf("layout should follow after 2 consecutive fixes, niri calls: %v", nir.calls)
 	}
@@ -682,11 +683,11 @@ func TestRealWordResetsFixRun(t *testing.T) {
 	// One wrong-layout word, then a real word: the run resets, so the
 	// next wrong word is fixed without moving the layout.
 	f.typeKeys(keysGhbdtn...)
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	f.typeKeys(keysHello...)
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	f.typeKeys(keysGhbdtn...)
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	for _, c := range nir.calls {
 		if strings.Contains(c, "switch-layout") {
 			t.Errorf("real word must reset the run, calls: %v", nir.calls)
@@ -701,11 +702,11 @@ func TestLayoutSwitchEventResetsFixRun(t *testing.T) {
 	f.Cfg.Daemon.SwitchAfterWords = 2
 
 	f.typeKeys(keysGhbdtn...)
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	nir.cur = 1                                                 // the manual toggle really changed the layout
 	f.handleStreamEvent(`{"KeyboardLayoutSwitched":{"idx":1}}`) // daemon learns of it
 	f.typeKeys(keysVbh...)
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	for _, c := range nir.calls {
 		if strings.Contains(c, "switch-layout ") && !strings.Contains(c, "keyboard-layouts") {
 			t.Errorf("manual layout switch must reset the run, calls: %v", nir.calls)
@@ -749,7 +750,7 @@ func TestLayoutChangeKeepsWordAndFixesUnderNewLayout(t *testing.T) {
 	if len(f.buf) != len(keysGhbdtn) {
 		t.Fatalf("layout change must keep the presses, got %d", len(f.buf))
 	}
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	if !rec.hasCall("wtype -- привет ") {
 		t.Errorf("word typed across a layout change must still fix, calls: %v", rec.calls)
 	}
@@ -768,7 +769,7 @@ func TestLayoutChangeMidWordGarbageStaysUntouched(t *testing.T) {
 	f.typeKeys([]uint16{45, 47, 39}...) // x v ; — EN chars in the app
 	f.handleStreamEvent(`{"KeyboardLayoutsChanged":{"keyboard_layouts":{"names":["English (US)","Russian"],"current_idx":1}}}`)
 	f.typeKeys([]uint16{26, 49, 23}...) // [ n i — RU chars in the app
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	for _, c := range rec.calls {
 		if strings.HasPrefix(c, "wtype") {
@@ -794,8 +795,8 @@ func TestOwnDeviceFilter(t *testing.T) {
 }
 
 func altTap(f *Daemon) {
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftAlt, Value: evdev.ValKeyDown})
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftAlt, Value: evdev.ValKeyUp})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftAlt, Value: evdev.ValKeyDown, Time: time.Now()})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyLeftAlt, Value: evdev.ValKeyUp, Time: time.Now()})
 }
 
 func TestDoubleAltFlipsBufferWordAndLayout(t *testing.T) {
@@ -843,8 +844,8 @@ func TestDoubleAltCancelledByLetter(t *testing.T) {
 	f.typeKeys(keysGhbdtn...)
 	altTap(f)
 	// A letter between the taps (Alt+x combo or plain typing) cancels.
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 45, Value: evdev.ValKeyDown})
-	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 45, Value: evdev.ValKeyUp})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 45, Value: evdev.ValKeyDown, Time: time.Now()})
+	f.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: 45, Value: evdev.ValKeyUp, Time: time.Now()})
 	altTap(f)
 
 	for _, c := range rec.calls {
@@ -973,7 +974,7 @@ func TestUndoByFixKey(t *testing.T) {
 	// The daemon auto-fixes "ghbdtn " → "привет " (and, with
 	// switch_after_words=1 in tests, moves the layout to RU).
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	if !rec.hasCall("wtype -- привет ") {
 		t.Fatalf("the fix must fire first, calls: %v", rec.calls)
 	}
@@ -1007,7 +1008,7 @@ func TestUndoRefusesAfterTyping(t *testing.T) {
 	d := newTestDaemon(t, rec, nir, 0)
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	// Text was typed since the fix — the caret may be anywhere.
 	d.typeKeys([]uint16{45}...)
 
@@ -1026,7 +1027,7 @@ func TestUndoRefusesWhenStale(t *testing.T) {
 	d.Cfg.Daemon.UndoWindowMs = 30
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	time.Sleep(60 * time.Millisecond)
 
 	if d.Undo() {
@@ -1040,7 +1041,7 @@ func TestUndoRefusesOtherApp(t *testing.T) {
 	d := newTestDaemon(t, rec, nir, 0)
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	d.mu.Lock()
 	d.appID = "zed" // focus moved to another application
 	d.mu.Unlock()
@@ -1057,7 +1058,7 @@ func TestUndoDisabledByConfig(t *testing.T) {
 	d.Cfg.Daemon.UndoWindowMs = 0
 
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if d.Undo() {
 		t.Error("undo_window_ms=0 must disable the undo")
@@ -1073,9 +1074,9 @@ func TestFixTailFlipsUnfixedKeepsFixed(t *testing.T) {
 	// word in either layout and stays as typed. The tail flip must keep
 	// the fixed word and flip only the missed one.
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	d.typeKeys([]uint16{45, 47, 39, 26, 49, 23}...) // xv;[ni
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !d.FixTail() {
 		t.Fatal("the missed word must be flippable")
@@ -1116,9 +1117,9 @@ func TestFixTailNothingWhenAllFixed(t *testing.T) {
 	// Both words were auto-fixed already: their flips read the same as
 	// the text — there is nothing to do.
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	d.typeKeys(keysVbh...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	before := len(rec.calls)
 
 	if d.FixTail() {
@@ -1137,10 +1138,10 @@ func TestFixTailEnterClearsTail(t *testing.T) {
 	// Enter commits the first phrase: the tail must hold only the words
 	// typed after it.
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyEnter, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeyEnter, Value: evdev.ValKeyDown, Time: time.Now()})
 	d.typeKeys([]uint16{45, 47, 39, 26, 49, 23}...) // xv;[ni
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 
 	if !d.FixTail() {
 		t.Fatal("the post-Enter word must be flippable")
@@ -1163,7 +1164,7 @@ func TestFixTailAfterUndoFlipsTyped(t *testing.T) {
 	// Fix, then undo by the fix key: the tail must follow the revert,
 	// and the tail flip then re-flips the typed word.
 	d.typeKeys(keysGhbdtn...)
-	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown})
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
 	if !d.Undo() {
 		t.Fatal("fresh fix must be undoable")
 	}
@@ -1174,6 +1175,88 @@ func TestFixTailAfterUndoFlipsTyped(t *testing.T) {
 		t.Errorf("expected the typed word to be flipped, calls: %v", rec.calls)
 	}
 }
+
+func TestGuardDropsWordTypedDuringInjection(t *testing.T) {
+	rec := &recorder{}
+	nir := &fakeNiri{cur: 0}
+	d := newTestDaemon(t, rec, nir, 0)
+
+	// The auto-fix fires; the presses that sat in the kernel queue while
+	// it was running carry earlier kernel timestamps — their place in the
+	// re-typed text is unknown, so the word they belong to is dropped.
+	d.typeKeys(keysGhbdtn...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
+	stale := time.Now().Add(-time.Second)
+	for _, c := range []uint16{45, 47, 39} {
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyDown, Time: stale})
+		d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: c, Value: evdev.ValKeyUp, Time: stale})
+	}
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: stale})
+	if len(rec.calls) != 2 {
+		t.Errorf("queued presses must be dropped, calls: %v", rec.calls)
+	}
+
+	// Fresh presses after the injection work normally again.
+	d.typeKeys(keysVbh...)
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
+	if !rec.injType("мир ") {
+		t.Errorf("tracking must resume after the injection, calls: %v", rec.calls)
+	}
+}
+
+func TestSwitchConfidenceImmediate(t *testing.T) {
+	// An ambiguous word: real in both dictionaries, the flipped reading
+	// overwhelmingly more frequent. With switch_confidence_k the layout
+	// follows at once, without waiting for the run.
+	dict_ := dict.New()
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/en_freq.txt", []byte("dfdf 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/ru_freq.txt", []byte("вава 1000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := dict_.LoadUserDict(dir); err != nil {
+		t.Fatal(err)
+	}
+	nir := &fakeNiri{cur: 0}
+	cfg := config.Defaults()
+	cfg.Fix.PauseMs = 0
+	cfg.Feedback.Notify = false
+	cfg.Feedback.Sound = ""
+	cfg.Daemon.SwitchLayout = true
+	cfg.Daemon.SwitchAfterWords = 5 // the run alone would never fire
+	cfg.Daemon.SwitchConfidenceK = 10
+	d := New(cfg, analyze.New(dict_), &niri.Client{Run: nir.run}, &recorder{}, false, false)
+	d.appID = "zcode"
+	d.cur = layoutEN
+
+	d.typeKeys([]uint16{32, 33, 32, 33}...) // d f d f → вава
+	d.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
+	if !nir.hasCall("switch-layout 1") {
+		t.Errorf("overwhelming confidence must switch immediately, niri calls: %v", nir.calls)
+	}
+
+	// Below the K threshold the run policy applies: no switch.
+	rec2 := &recorder{}
+	nir2 := &fakeNiri{cur: 0}
+	cfg2 := config.Defaults()
+	cfg2.Fix.PauseMs = 0
+	cfg2.Feedback.Notify = false
+	cfg2.Feedback.Sound = ""
+	cfg2.Daemon.SwitchLayout = true
+	cfg2.Daemon.SwitchAfterWords = 5
+	cfg2.Daemon.SwitchConfidenceK = 2000
+	d2 := New(cfg2, analyze.New(dict_), &niri.Client{Run: nir2.run}, rec2, false, false)
+	d2.appID = "zcode"
+	d2.cur = layoutEN
+	d2.typeKeys([]uint16{32, 33, 32, 33}...)
+	d2.handleEvent(evdev.Event{Type: evdev.TypeKey, Code: evdev.KeySpace, Value: evdev.ValKeyDown, Time: time.Now()})
+	if nir2.hasCall("switch-layout") {
+		t.Errorf("ratio below K must not switch, niri calls: %v", nir2.calls)
+	}
+}
+
 func TestSingletonLock(t *testing.T) {
 	// Isolate from the real daemon's lock: lockSingleton reads
 	// XDG_RUNTIME_DIR at call time (t.Setenv also forbids t.Parallel —

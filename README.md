@@ -126,6 +126,10 @@ inject_method          = "wtype"  # "wtype" (keysyms) | "uinput" (raw
 switch_layout          = true  # after 2 consecutive dictionary fixes to
                                # the same language, move the layout there
 switch_after_words     = 2     # 1 = move on every fix; [1, 10]
+switch_confidence_k    = 0     # switch at once when a word real in both
+                               # dictionaries flips to a K-times more
+                               # frequent reading; 0 = off until a replay
+                               # corpus backs the default
 remember_window_layout = true  # restore the last typed language per app
 default_layout         = ""    # language for windows of unknown apps:
                                # "", "en" or "ru" ("" = don't touch)

@@ -12,11 +12,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Event is a stripped-down linux input_event (24 bytes on 64-bit):
-// type, code, value; the timestamp is not needed for keystroke tracking.
+// type, code, value. Time is the kernel's timestamp of the physical
+// event — unlike processing time it survives queueing, which lets the
+// daemon detect presses that physically happened while an injection was
+// in flight.
 type Event struct {
+	Time  time.Time
 	Type  uint16
 	Code  uint16
 	Value int32
@@ -215,7 +220,10 @@ func (r *Reader) ReadEvent() (Event, error) {
 	if _, err := io.ReadFull(r.f, buf[:]); err != nil {
 		return Event{}, err
 	}
+	sec := int64(binary.LittleEndian.Uint64(buf[0:8]))
+	usec := int64(binary.LittleEndian.Uint64(buf[8:16]))
 	return Event{
+		Time:  time.Unix(sec, usec*1_000),
 		Type:  binary.LittleEndian.Uint16(buf[16:18]),
 		Code:  binary.LittleEndian.Uint16(buf[18:20]),
 		Value: int32(binary.LittleEndian.Uint32(buf[20:24])),

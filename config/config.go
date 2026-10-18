@@ -46,6 +46,13 @@ type Config struct {
 		// wait for a run of wrong-layout words so a single fixed word
 		// doesn't yank the layout around.
 		SwitchAfterWords int `toml:"switch_after_words"`
+		// SwitchConfidenceK switches the layout immediately (skipping
+		// the run counter) when a fixed word is real in BOTH layout
+		// dictionaries and the flipped reading scores K times higher —
+		// an unambiguous wrong-layout episode on an ambiguous word.
+		// 0 (default) disables it: the immediate switch awaits a
+		// replay corpus (see TODO.md).
+		SwitchConfidenceK int `toml:"switch_confidence_k"`
 		// BoundaryPauseMs is the idle time after which the buffered word
 		// counts as finished even without a separator. 0 (default)
 		// disables it: words complete only on the space separator, so a
@@ -116,6 +123,7 @@ func Defaults() *Config {
 	c.Daemon.MinWordLen = 3
 	c.Daemon.SwitchLayout = true
 	c.Daemon.SwitchAfterWords = 2
+	c.Daemon.SwitchConfidenceK = 0
 	c.Daemon.DoubleAltFlip = false
 	c.Daemon.DoubleAltWindowMs = 1000
 	c.Daemon.UndoWindowMs = 2000
@@ -206,6 +214,10 @@ func (c *Config) Validate() error {
 
 	if w := c.Daemon.SwitchAfterWords; w < 1 || w > 10 {
 		issues = append(issues, fmt.Sprintf("daemon.switch_after_words: must be in [1, 10], got %d", w))
+	}
+
+	if w := c.Daemon.SwitchConfidenceK; w != 0 && (w < 2 || w > 1000) {
+		issues = append(issues, fmt.Sprintf("daemon.switch_confidence_k: must be 0 (disabled) or in [2, 1000], got %d", w))
 	}
 
 	if c.Daemon.MinWordLen < 1 || c.Daemon.MinWordLen > 10 {
