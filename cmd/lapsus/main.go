@@ -107,7 +107,7 @@ func runDaemonCommand(args []string) {
 		fmt.Fprintln(os.Stderr, "lapsus daemon:", err)
 		os.Exit(1)
 	}
-	nir := &niri.Client{}
+	nir := &niri.Client{Backend: niri.Backend(strings.ToLower(cfg.Daemon.Compositor))}
 
 	// Injection backend for the daemon: wtype (keysyms via compositor)
 	// or uinput (raw keycodes via a virtual kernel keyboard).
@@ -278,7 +278,7 @@ func runFixCommand(args []string) {
 	// toggle, which keeps the spawn fast.
 	fixer := &fix.Fixer{
 		Cfg:  cfg,
-		Niri: &niri.Client{},
+		Niri: &niri.Client{Backend: niri.Backend(strings.ToLower(cfg.Daemon.Compositor))},
 		Way:  &wayland.Tools{Pause: time.Duration(cfg.Fix.PauseMs) * time.Millisecond},
 		FB: &feedback.F{
 			Notify: cfg.Feedback.Notify,

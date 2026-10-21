@@ -203,6 +203,24 @@ CGO запрещён). Архитектурный контекст — README.md
 
 ## M4 — universal Wayland: без привязки к WM (план, 2026-08-30)
 
+Бэкенд umbriel (2026-10-18, юзер переехал на umbriel — M4 стал
+насущным): umbriel оказался niri-подобным по IPC — `umbriel
+keyboard-layouts --json` (тот же формат, поле current_index),
+`umbriel windows --json` (массив, `active` = глобальный фокус,
+`focused` — на-выводный), `umbriel msg keyboard-layout-next` (нет
+set-by-index — свитч докручивает next по кругу), `umbriel subscribe
+keyboard_layout,windows` (JSON-строки). Реализация: niri.Client получил
+бэкенды (auto: NIRI_SOCKET→niri, иначе umbriel; тесты с Runner всегда
+niri — герметичность), стрим umbriel транслируется в niri-события
+(keyboard_layout → KeyboardLayoutsChanged + KeyboardLayoutSwitched при
+смене индекса — per-app обучение живёт; windows → WindowFocusChanged
+только при смене active-приложения — демон сам переcпрашивает фокус).
+Конфиг daemon.compositor=auto|niri|umbriel. Весь демон/CLI (фикс, undo,
+хвост, per-app память, исключения, терминал-детект) работает на обоих
+композиторах без изменений. Остаток universal (для композиторов без
+такого IPC): layout_toggle_key — трекинг и свитч раскладки через evdev/
+инъекцию тумблера; wlr-foreign-toplevel для фокуса.
+
 Шаг А2, хвост (2026-10-18): guard гонки «юзер печатает во время
 инъекции» — evdev.Event несёт kernel-таймстамп нажатия (timeval из
 input_event); демон помнит lastInjectEnd (все инъекции через

@@ -34,6 +34,10 @@ type Config struct {
 	} `toml:"fix"`
 
 	Daemon struct {
+		// Compositor selects the compositor CLI backend: "auto" (niri
+		// when NIRI_SOCKET is set, else umbriel when its binary exists),
+		// "niri" or "umbriel".
+		Compositor string `toml:"compositor"`
 		// ExcludeAppIDs lists niri app_id values where auto-fix is
 		// disabled (VMs, games, remote desktop...).
 		ExcludeAppIDs []string `toml:"exclude_app_ids"`
@@ -117,6 +121,7 @@ func Defaults() *Config {
 	c := &Config{}
 	c.Hotkey.Terminals = append(c.Hotkey.Terminals, DefaultTerminals...)
 	c.Capture.Method = "clipboard"
+	c.Daemon.Compositor = "auto"
 	c.Fix.SwitchLayout = true
 	c.Fix.PauseMs = 50
 	c.Daemon.BoundaryPauseMs = 0
@@ -202,6 +207,12 @@ func (c *Config) Validate() error {
 	case "", "en", "ru":
 	default:
 		issues = append(issues, fmt.Sprintf("daemon.default_layout: must be \"\", \"en\" or \"ru\", got %q", c.Daemon.DefaultLayout))
+	}
+
+	switch strings.ToLower(c.Daemon.Compositor) {
+	case "", "auto", "niri", "umbriel":
+	default:
+		issues = append(issues, fmt.Sprintf("daemon.compositor: must be \"auto\", \"niri\" or \"umbriel\", got %q", c.Daemon.Compositor))
 	}
 
 	if w := c.Daemon.DoubleAltWindowMs; w != 0 && (w < 100 || w > 5000) {

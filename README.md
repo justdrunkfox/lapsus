@@ -16,7 +16,7 @@ A wrong-keyboard-layout fixer for Linux/Wayland, built for [niri](https://github
 
 ## Requirements
 
-- Linux, Wayland; compositor integration is currently [niri](https://github.com/niri-wm/niri)-specific (layout switching and window focus over `niri msg`)
+- Linux, Wayland; compositor integration: [niri](https://github.com/niri-wm/niri) and [umbriel](https://docs.noctalia.dev/umbriel/) (`daemon.compositor = "auto"` picks niri when `NIRI_SOCKET` is set, else umbriel)
 - Go ≥ 1.26 (build only; CGO is not used)
 - [wtype](https://github.com/atx/wtype) and [wl-clipboard](https://github.com/bugaevc/wl-clipboard)
 - `libnotify-bin` for desktop notifications (optional)
@@ -119,6 +119,7 @@ notify = true            # desktop notification on every flip
 sound  = "bell"        # "bell" (freedesktop), a path to a file, or ""
 
 [daemon]
+compositor             = "auto" # compositor CLI backend: auto | niri | umbriel
 tray                   = true  # tray icon: layout flag + toggles
 inject_method          = "wtype"  # "wtype" (keysyms) | "uinput" (raw
                                # keycodes via /dev/uinput; needs the

@@ -16,7 +16,7 @@
 
 ## Требования
 
-- Linux, Wayland; интеграция с композитором сейчас — [niri](https://github.com/niri-wm/niri) (переключение раскладки и фокус окна через `niri msg`)
+- Linux, Wayland; интеграция с композитором: [niri](https://github.com/niri-wm/niri) и [umbriel](https://docs.noctalia.dev/umbriel/) (`daemon.compositor = "auto"`: niri, если задан `NIRI_SOCKET`, иначе umbriel)
 - Go ≥ 1.26 (для сборки; CGO не используется)
 - [wtype](https://github.com/atx/wtype), [wl-clipboard](https://github.com/bugaevc/wl-clipboard)
 - `libnotify-bin` для нотификаций (опционально)
@@ -119,6 +119,7 @@ notify = true            # системная нотификация при пе
 sound  = "bell"        # "bell" (freedesktop), путь к файлу или ""
 
 [daemon]
+compositor             = "auto" # бэкенд CLI композитора: auto | niri | umbriel
 tray                   = true  # иконка в трее: флаг раскладки + тумблеры
 inject_method          = "wtype"  # "wtype" (keysyms) | "uinput" (сырые
                                # коды через /dev/uinput; нужно udev-правило
